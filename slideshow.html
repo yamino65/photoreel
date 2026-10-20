@@ -242,17 +242,28 @@
   .close-btn { width: 40px; height: 40px; }
   .close-btn svg { width: 18px; height: 18px; }
   .sec-badge { font-size: 13px; font-variant-numeric: tabular-nums; opacity: .85; }
-  .top-right { display: flex; align-items: center; gap: 10px; }
+  /* 動画モード */
+  .vm-video { display: none; }
+  #player.vm .vm-video {
+    display: block; position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: contain; background: #000;
+  }
+  #player.vm .hud-bottom, #player.vm .counter { display: none; }
+  .vm-panel {
+    top: 50%; transform: translateY(-50%);
+    padding-left: max(24px, env(safe-area-inset-left, 0px));
+    padding-right: max(24px, env(safe-area-inset-right, 0px));
+    display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center;
+  }
+  .vm-panel p { margin: 0; text-shadow: 0 1px 4px rgba(0,0,0,.8); }
+  #vmStatus { font-size: 16px; font-variant-numeric: tabular-nums; }
+  .vm-note { font-size: 13px; opacity: .85; max-width: 22em; }
   .fs-btn {
-    display: flex; align-items: center; gap: 6px;
+    display: flex; align-items: center; gap: 8px;
     background: var(--accent); color: var(--accent-ink); border: none;
-    border-radius: 999px; padding: 8px 14px; font-weight: 700; font-size: 14px;
+    border-radius: 999px; padding: 14px 24px; font-weight: 700; font-size: 17px;
   }
-  .fs-btn svg { width: 16px; height: 16px; fill: currentColor; }
-  .vm-video {
-    position: absolute; left: 0; bottom: 0; width: 2px; height: 2px;
-    opacity: 0.01; pointer-events: none;
-  }
+  .fs-btn svg { width: 20px; height: 20px; fill: currentColor; }
 
   .toast {
     position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
@@ -356,7 +367,7 @@
         </select>
       </div>
     </div>
-    <p class="hint" id="vmodeHint" style="margin:0" hidden>動画モードは試作中です。再生画面の右上の「全画面」を押すと、iPhoneの動画プレーヤーで全画面になります。</p>
+    <p class="hint" id="vmodeHint" style="margin:0" hidden>動画モードは試作中です。スライドショーを動画に書き出してから、iPhoneの動画プレーヤーで全画面再生します。写真が多いと書き出しに時間がかかります。</p>
   </section>
 </main>
 
@@ -369,21 +380,23 @@
   <div class="stage" id="stage">
     <img class="layer" id="layerA" alt="">
     <img class="layer" id="layerB" alt="">
+    <video id="vmVideo" class="vm-video" muted playsinline></video>
   </div>
   <div class="hud hud-top">
     <span class="counter" id="counter">1 / 1</span>
-    <div class="top-right">
-      <button class="fs-btn" id="fsBtn" type="button" hidden>
-        <svg viewBox="0 0 24 24"><path d="M4 4h6v2H6v4H4zm10 0h6v6h-2V6h-4zM4 14h2v4h4v2H4zm14 0h2v6h-6v-2h4z"/></svg>
-        全画面
-      </button>
-      <button class="icon-btn close-btn" id="closeBtn" type="button" aria-label="閉じる">
-        <svg viewBox="0 0 24 24"><path d="M5.3 4 12 10.7 18.7 4 20 5.3 13.3 12 20 18.7 18.7 20 12 13.3 5.3 20 4 18.7 10.7 12 4 5.3z"/></svg>
-      </button>
-    </div>
+    <button class="icon-btn close-btn" id="closeBtn" type="button" aria-label="閉じる">
+      <svg viewBox="0 0 24 24"><path d="M5.3 4 12 10.7 18.7 4 20 5.3 13.3 12 20 18.7 18.7 20 12 13.3 5.3 20 4 18.7 10.7 12 4 5.3z"/></svg>
+    </button>
   </div>
-  <!-- 動画モード用：スライドショーを描いた動画。ほぼ見えない大きさで置いておき、全画面ボタンでこれを拡大する -->
-  <video id="vmVideo" class="vm-video" muted playsinline></video>
+  <!-- 動画モード用：作った動画の進み具合と、全画面再生ボタン -->
+  <div class="hud vm-panel" id="vmPanel" hidden>
+    <p id="vmStatus">動画を作っています… 0%</p>
+    <button class="fs-btn" id="fsBtn" type="button" hidden>
+      <svg viewBox="0 0 24 24"><path d="M4 4h6v2H6v4H4zm10 0h6v6h-2V6h-4zM4 14h2v4h4v2H4zm14 0h2v6h-6v-2h4z"/></svg>
+      全画面で再生
+    </button>
+    <p class="vm-note" id="vmNote" hidden>全画面中の一時停止や終了は、iPhoneの動画プレーヤーのボタンで行います。</p>
+  </div>
   <div class="hud hud-bottom">
     <div class="controls">
       <button class="icon-btn" id="prevBtn" type="button" aria-label="前の写真">
@@ -401,6 +414,8 @@
   <div class="toast" id="toast" hidden></div>
 </div>
 
+<!-- MP4動画ファイルを組み立てるライブラリ（動画モードで使う） -->
+<script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/build/mp4-muxer.min.js"></script>
 <script>
 (() => {
   // ===== 要素の取得 =====
@@ -410,7 +425,7 @@
   const chips = $("chips"), secInput = $("secInput");
   const orderSel = $("orderSel"), transSel = $("transSel"), fitSel = $("fitSel"), loopSel = $("loopSel");
   const fadeSel = $("fadeSel"), vmodeSel = $("vmodeSel"), vmodeHint = $("vmodeHint");
-  const fsBtn = $("fsBtn"), vmVideo = $("vmVideo");
+  const fsBtn = $("fsBtn"), vmVideo = $("vmVideo"), vmPanel = $("vmPanel"), vmStatus = $("vmStatus"), vmNote = $("vmNote");
   const startBtn = $("startBtn"), startInfo = $("startInfo");
   const player = $("player"), layers = [$("layerA"), $("layerB")];
   const counter = $("counter"), secBadge = $("secBadge"), toast = $("toast");
@@ -643,20 +658,16 @@
     player.hidden = false;
     document.body.style.overflow = "hidden";
     // パソコンでは本物の全画面にする（iPhoneは非対応なので失敗しても無視）
-    if (vmodeSel.value === "video") {
-      vm = setupVideoMode();
-    } else {
-      try { player.requestFullscreen?.().catch(() => {}); } catch (e) {}
-    }
-    fsBtn.hidden = !vm;
+    showHud();
+    if (vmodeSel.value === "video") { startVideoMode(); return; }
+    try { player.requestFullscreen?.().catch(() => {}); } catch (e) {}
     show(0);
     setPlaying(true);
-    showHud();
   }
 
   function stop() {
     setPlaying(false);
-    teardownVideoMode();
+    stopVideoMode();
     player.hidden = true;
     document.body.style.overflow = "";
     try { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); } catch (e) {}
@@ -674,7 +685,6 @@
     if (pos !== p) return; // デコード中に別の写真へ移動していたら中止
     // ズームの向きを毎回ランダムに
     const kx = Math.random() * 6 - 3, ky = Math.random() * 6 - 3;
-    if (vm) vmShow(img, kx, ky);
     if (transSel.value === "kenburns") {
       img.style.setProperty("--kx", kx.toFixed(1) + "%");
       img.style.setProperty("--ky", ky.toFixed(1) + "%");
@@ -739,62 +749,134 @@
   }
 
   // ===== 動画モード =====
-  // canvas（お絵かき用の板）にスライドショーを描き、それを動画として <video> に流す。
-  // iPhoneは <video> だけ本物の全画面にできるので、時刻や電池の表示も消える。
-  let vm = null;
-  function setupVideoMode() {
-    const canvas = document.createElement("canvas");
-    if (!canvas.captureStream) {
-      flash("この端末は動画モードに対応していません");
-      return null;
+  // スライドショーを1コマずつ canvas（お絵かき用の板）に描き、MP4動画ファイルに書き出す。
+  // iPhoneは動画だけ本物の全画面にできるので、時刻や電池の表示も消える。
+  let vmJob = null, vmUrl = null;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  async function startVideoMode() {
+    player.classList.add("vm");
+    vmPanel.hidden = false; fsBtn.hidden = true; vmNote.hidden = true;
+    if (!("VideoEncoder" in window) || !window.Mp4Muxer) {
+      vmStatus.textContent = "このiPhoneでは動画モードを使えません。iOS 16.4以降にアップデートするか、「ふつう」を選んでください。";
+      return;
     }
-    // 画面の向きに合わせた大きさ（長い辺は最大1920pxにして処理を軽くする）
-    const dpr = Math.min(window.devicePixelRatio || 1, 3);
-    const sw = Math.min(screen.width, screen.height) * dpr, sh = Math.max(screen.width, screen.height) * dpr;
-    const portrait = window.innerHeight >= window.innerWidth;
-    let w = portrait ? sw : sh, h = portrait ? sh : sw;
-    const k = Math.min(1, 1920 / Math.max(w, h));
-    canvas.width = Math.round(w * k); canvas.height = Math.round(h * k);
+    const job = { cancelled: false };
+    vmJob = job;
+    vmStatus.textContent = "動画を作っています… 0%";
+    try {
+      const blob = await makeVideo(job, (p) => {
+        vmStatus.textContent = `動画を作っています… ${Math.floor(p * 100)}%`;
+      });
+      if (job.cancelled) return;
+      vmUrl = URL.createObjectURL(blob);
+      vmVideo.src = vmUrl;
+      vmVideo.loop = loopSel.value === "loop";
+      vmVideo.play().catch(() => {});
+      vmStatus.textContent = "できました";
+      fsBtn.hidden = false; vmNote.hidden = false;
+      requestWakeLock();
+    } catch (e) {
+      if (job.cancelled) return;
+      vmStatus.textContent = "動画を作れませんでした（" + (e && e.message ? e.message : e) + "）";
+    }
+  }
+
+  function stopVideoMode() {
+    if (vmJob) vmJob.cancelled = true;
+    vmJob = null;
+    player.classList.remove("vm");
+    vmPanel.hidden = true;
+    vmVideo.pause();
+    vmVideo.removeAttribute("src");
+    vmVideo.load();
+    if (vmUrl) { URL.revokeObjectURL(vmUrl); vmUrl = null; }
+  }
+
+  // 動画の大きさ：今の画面の向きと縦横比に合わせ、長い辺を1920pxにする（偶数にそろえる）
+  function videoSize() {
+    const a = Math.min(screen.width, screen.height), b = Math.max(screen.width, screen.height);
+    const long = 1920, short = Math.round((long * a) / b / 2) * 2;
+    return window.innerHeight >= window.innerWidth ? { W: short, H: long } : { W: long, H: short };
+  }
+
+  // 写真を動画の大きさに合わせて縮めた下絵を作る
+  function prescale(url, W, H) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement("canvas");
+        c.width = W; c.height = H;
+        const g = c.getContext("2d");
+        g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
+        const iw = img.naturalWidth, ih = img.naturalHeight;
+        const s = fitSel.value === "cover" ? Math.max(W / iw, H / ih) : Math.min(W / iw, H / ih);
+        g.drawImage(img, (W - iw * s) / 2, (H - ih * s) / 2, iw * s, ih * s);
+        img.src = "";
+        resolve(c);
+      };
+      img.onerror = () => {
+        const c = document.createElement("canvas");
+        c.width = W; c.height = H;
+        resolve(c); // 読めない写真は黒い画面にする
+      };
+      img.src = url;
+    });
+  }
+
+  // この端末で使える動画の形式（H.264）を探す
+  async function pickConfig(W, H) {
+    // 末尾の 28/33 は「レベル」（扱える画面サイズの上限）。大きい画面だと 33 が必要になる
+    for (const codec of ["avc1.640028", "avc1.640033", "avc1.4d0028", "avc1.4d0033", "avc1.42002a", "avc1.420033"]) {
+      const cfg = { codec, width: W, height: H, bitrate: 8_000_000, framerate: 30, avc: { format: "avc" } };
+      try {
+        const r = await VideoEncoder.isConfigSupported(cfg);
+        if (r.supported) return cfg;
+      } catch (e) { /* 次の候補へ */ }
+    }
+    throw new Error("動画の形式に対応していません");
+  }
+
+  async function makeVideo(job, onProgress) {
+    const { W, H } = videoSize();
+    const cfg = await pickConfig(W, H);
+    const canvas = document.createElement("canvas");
+    canvas.width = W; canvas.height = H;
     const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    const stream = canvas.captureStream(30);
-    vmVideo.srcObject = stream;
-    vmVideo.play().catch(() => {});
-    const state = { canvas, ctx, stream, cur: null, prev: null, clock: 0, last: performance.now(), fs: false };
-    state.timer = setInterval(() => vmRender(state), 33); // 1秒に約30回描く
-    return state;
-  }
-  function teardownVideoMode() {
-    if (!vm) return;
-    clearInterval(vm.timer);
-    vm.stream.getTracks().forEach((t) => t.stop());
-    vmVideo.srcObject = null;
-    vm = null;
-    fsBtn.hidden = true;
-  }
-  // 写真を canvas の大きさに縮めた下絵を1回だけ作っておき、毎回の描画を軽くする
-  function vmShow(img, kx, ky) {
-    const { canvas } = vm;
-    const W = canvas.width, H = canvas.height;
-    const pre = document.createElement("canvas");
-    pre.width = W; pre.height = H;
-    const g = pre.getContext("2d");
-    g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
-    const iw = img.naturalWidth || W, ih = img.naturalHeight || H;
-    const s = fitSel.value === "cover" ? Math.max(W / iw, H / ih) : Math.min(W / iw, H / ih);
-    g.drawImage(img, (W - iw * s) / 2, (H - ih * s) / 2, iw * s, ih * s);
-    vm.prev = vm.cur;
-    vm.cur = { pre, kx, ky, t0: performance.now(), c0: vm.clock };
-  }
-  function vmRender(st) {
-    const now = performance.now();
-    if (playing) st.clock += now - st.last; // ズームは一時停止中は止める
-    st.last = now;
-    const { ctx, canvas } = st, W = canvas.width, H = canvas.height;
+
+    const muxer = new Mp4Muxer.Muxer({
+      target: new Mp4Muxer.ArrayBufferTarget(),
+      video: { codec: "avc", width: W, height: H },
+      fastStart: "in-memory",
+    });
+    let encErr = null;
+    const encoder = new VideoEncoder({
+      output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+      error: (e) => { encErr = e; },
+    });
+    encoder.configure(cfg);
+
+    // 今の canvas の絵を、指定ミリ秒ぶん表示される1コマとして動画に追加する
+    let t = 0, count = 0;
+    const emit = async (durMs, key) => {
+      if (encErr) throw encErr;
+      if (job.cancelled) throw new Error("中止");
+      const f = new VideoFrame(canvas, { timestamp: Math.round(t * 1000), duration: Math.round(durMs * 1000) });
+      encoder.encode(f, { keyFrame: !!key || count % 90 === 0 });
+      f.close();
+      t += durMs; count++;
+      while (encoder.encodeQueueSize > 6) await sleep(4); // 詰まりすぎないように少し待つ
+    };
+
+    const STEP = 1000 / 30;                 // 1コマ＝30分の1秒
+    const sec = getSec() * 1000;
+    const fade = transSel.value === "none" ? 0 : fadeMs;
     const kb = transSel.value === "kenburns";
-    const kbDur = getSec() * 1000 + fadeMs * 2;
-    const draw = (sl, alpha) => {
-      const p = kb ? Math.min(1, (st.clock - sl.c0) / kbDur) : 0;
+    const kbDur = sec + fade * 2;
+
+    // 1枚の写真を、透明度 alpha・その写真が出てから local ミリ秒の時点のズームで描く
+    const draw = (sl, alpha, local) => {
+      const p = kb ? Math.min(1, Math.max(0, local) / kbDur) : 0;
       const sc = 1 + 0.12 * p;
       ctx.save();
       ctx.globalAlpha = alpha;
@@ -804,30 +886,57 @@
       ctx.drawImage(sl.pre, 0, 0, W, H);
       ctx.restore();
     };
-    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
-    if (!st.cur) return;
-    const a = transSel.value === "none" || fadeMs <= 0 ? 1 : Math.min(1, (now - st.cur.t0) / fadeMs);
-    if (st.prev && a < 1) draw(st.prev, 1); else st.prev = null;
-    draw(st.cur, a);
+    const clear = () => { ctx.globalAlpha = 1; ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H); };
+    // 前の写真から次の写真へフェードするコマを書き出す
+    const fadeFrames = async (prev, cur) => {
+      for (let ms = 0; ms < fade; ms += STEP) {
+        clear();
+        draw(prev, 1, sec + ms);
+        draw(cur, ms / fade, ms);
+        await emit(STEP, ms === 0);
+      }
+    };
+
+    const seq = order.map((i) => items[i]);
+    const slide = async (it) => ({ pre: await prescale(it.url, W, H), kx: Math.random() * 6 - 3, ky: Math.random() * 6 - 3 });
+    let prev = null, first = null;
+    for (let i = 0; i < seq.length; i++) {
+      const cur = await slide(seq[i]);
+      if (i === 0) first = cur;
+      const fadeIn = prev ? fade : 0;
+      if (prev) await fadeFrames(prev, cur);
+      if (kb) {
+        // ズームするときは、止まっている間も1コマずつ描く
+        for (let ms = fadeIn; ms < sec; ms += STEP) { clear(); draw(cur, 1, ms); await emit(STEP, ms === fadeIn); }
+      } else {
+        // ズームしないときは、1コマを長く表示させるだけでよい（書き出しが速い）
+        clear(); draw(cur, 1, 0);
+        await emit(sec - fadeIn, true);
+      }
+      if (prev && prev !== first) prev.pre.width = 0; // 使い終わった下絵のメモリを手放す
+      prev = cur;
+      onProgress((i + 1) / seq.length);
+    }
+    // 繰り返すときは、最後の写真から最初の写真へフェードして、つなぎ目を自然にする
+    if (loopSel.value === "loop" && seq.length > 1 && fade > 0) await fadeFrames(prev, first);
+
+    await encoder.flush();
+    encoder.close();
+    muxer.finalize();
+    return new Blob([muxer.target.buffer], { type: "video/mp4" });
   }
 
   fsBtn.addEventListener("click", () => {
-    if (!vm) return;
     try {
+      vmVideo.play().catch(() => {});
       if (vmVideo.webkitEnterFullscreen) vmVideo.webkitEnterFullscreen();      // iPhone
       else vmVideo.requestFullscreen().catch(() => flash("全画面にできませんでした"));
     } catch (e) {
-      flash("準備中です。少し待ってからもう一度押してください");
+      flash("全画面にできませんでした。もう一度押してください");
     }
   });
-  // 動画プレーヤーの再生／一時停止ボタンと、スライドショーを連動させる
-  vmVideo.addEventListener("webkitbeginfullscreen", () => { if (vm) vm.fs = true; });
-  vmVideo.addEventListener("webkitendfullscreen", () => {
-    if (vm) vm.fs = false;
-    vmVideo.play().catch(() => {}); // 全画面を閉じると動画が止まるので動かし直す
-  });
-  vmVideo.addEventListener("pause", () => { if (vm?.fs && playing) setPlaying(false); });
-  vmVideo.addEventListener("play", () => { if (vm?.fs && !playing) setPlaying(true); });
+  // 全画面を閉じると動画が止まるので、画面内で動かし直す
+  vmVideo.addEventListener("webkitendfullscreen", () => { vmVideo.play().catch(() => {}); });
 
   // ===== 画面スリープを防ぐ（対応環境のみ） =====
   async function requestWakeLock() {
