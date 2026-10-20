@@ -147,6 +147,7 @@
 
   /* 見せ方の設定 */
   .opts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .opt.wide { grid-column: 1 / -1; }
   @media (max-width: 420px) { .opts { grid-template-columns: 1fr; } }
   .opt {
     display: flex; flex-direction: column; gap: 4px;
@@ -242,14 +243,6 @@
   .close-btn svg { width: 18px; height: 18px; }
   .sec-badge { font-size: 13px; font-variant-numeric: tabular-nums; opacity: .85; }
 
-  /* 進行バー（常に画面最下部に細く表示） */
-  .progress {
-    position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
-    background: rgba(255,255,255,.15);
-  }
-  .progress i { display: block; height: 100%; width: 0; background: var(--accent); }
-  #player.hud-hidden .progress { opacity: .55; }
-
   .toast {
     position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
     background: rgba(0,0,0,.7); padding: 10px 18px; border-radius: 12px; font-size: 14px;
@@ -313,14 +306,6 @@
         </select>
       </div>
       <div class="opt">
-        <label for="transSel">切り替え</label>
-        <select id="transSel">
-          <option value="fade">フェード</option>
-          <option value="kenburns">ゆっくりズーム</option>
-          <option value="none">パッと切り替え</option>
-        </select>
-      </div>
-      <div class="opt">
         <label for="fitSel">表示サイズ</label>
         <select id="fitSel">
           <option value="contain">写真全体を表示</option>
@@ -328,6 +313,24 @@
         </select>
       </div>
       <div class="opt">
+        <label for="transSel">切り替え</label>
+        <select id="transSel">
+          <option value="fade">フェード</option>
+          <option value="kenburns">フェード＋ゆっくりズーム</option>
+          <option value="none">パッと切り替え</option>
+        </select>
+      </div>
+      <div class="opt">
+        <label for="fadeSel">フェードの長さ</label>
+        <select id="fadeSel">
+          <option value="0.5">0.5秒（さっと）</option>
+          <option value="1">1秒</option>
+          <option value="2">2秒</option>
+          <option value="3">3秒</option>
+          <option value="5">5秒（じんわり）</option>
+        </select>
+      </div>
+      <div class="opt wide">
         <label for="loopSel">最後まで行ったら</label>
         <select id="loopSel">
           <option value="loop">最初から繰り返す</option>
@@ -368,7 +371,6 @@
     </div>
     <span class="sec-badge" id="secBadge"></span>
   </div>
-  <div class="progress"><i id="bar"></i></div>
   <div class="toast" id="toast" hidden></div>
 </div>
 
@@ -380,9 +382,10 @@
   const clearBtn = $("clearBtn"), sampleNote = $("sampleNote"), pickLabel = $("pickLabel");
   const chips = $("chips"), secInput = $("secInput");
   const orderSel = $("orderSel"), transSel = $("transSel"), fitSel = $("fitSel"), loopSel = $("loopSel");
+  const fadeSel = $("fadeSel");
   const startBtn = $("startBtn"), startInfo = $("startInfo");
   const player = $("player"), layers = [$("layerA"), $("layerB")];
-  const counter = $("counter"), bar = $("bar"), secBadge = $("secBadge"), toast = $("toast");
+  const counter = $("counter"), secBadge = $("secBadge"), toast = $("toast");
   const playBtn = $("playBtn"), playIcon = $("playIcon");
 
   const ICON_PAUSE = '<path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/>';
@@ -403,16 +406,21 @@
       if (s.trans) transSel.value = s.trans;
       if (s.fit) fitSel.value = s.fit;
       if (s.loop) loopSel.value = s.loop;
-    } catch (e) { /* 保存できない環境では初期値のまま */ }
+      fadeSel.value = s.fade || "2";
+    } catch (e) { fadeSel.value = "2"; /* 保存できない環境では初期値のまま */ }
+    syncFadeSel();
   }
   function saveSettings() {
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
         sec: secInput.value, order: orderSel.value, trans: transSel.value,
-        fit: fitSel.value, loop: loopSel.value,
+        fit: fitSel.value, loop: loopSel.value, fade: fadeSel.value,
       }));
     } catch (e) { /* 無視 */ }
   }
+  // 「パッと切り替え」のときはフェードの長さを選べないようにする
+  function syncFadeSel() { fadeSel.disabled = transSel.value === "none"; }
+  transSel.addEventListener("change", syncFadeSel);
 
   // ===== 秒数の扱い =====
   function getSec() {
@@ -443,7 +451,7 @@
   });
   secInput.addEventListener("input", () => { syncChips(); saveSettings(); });
   secInput.addEventListener("change", () => { secInput.value = getSec(); syncChips(); });
-  [orderSel, transSel, fitSel, loopSel].forEach((el) => el.addEventListener("change", saveSettings));
+  [orderSel, transSel, fitSel, loopSel, fadeSel].forEach((el) => el.addEventListener("change", saveSettings));
 
   // ===== サンプル画像を canvas で作る =====
   const SAMPLES = [
@@ -576,7 +584,8 @@
   // ===== プレイヤー =====
   let order = [], pos = 0, playing = false, elapsed = 0, lastTs = 0, rafId = 0;
   let front = 0;            // いま表示中のレイヤー（0 か 1）
-  let hudTimer = 0, wakeLock = null, finished = false;
+  let wakeLock = null, finished = false;
+  let fadeMs = 2000;        // 今回の再生で使うフェードの長さ（ミリ秒）
 
   function shuffle(arr) {
     const a = arr.slice();
@@ -595,8 +604,9 @@
     pos = 0; elapsed = 0; finished = false;
     player.classList.toggle("fit-cover", fitSel.value === "cover");
     player.classList.toggle("trans-none", transSel.value === "none");
-    const fade = Math.min(800, getSec() * 1000 * 0.4); // 秒数が短いときはフェードも短く
-    player.style.setProperty("--fade", fade + "ms");
+    // フェードが表示秒数より長いと次の写真が重なり続けるので、表示秒数の9割までに抑える
+    fadeMs = Math.min(parseFloat(fadeSel.value) * 1000, getSec() * 1000 * 0.9);
+    player.style.setProperty("--fade", fadeMs + "ms");
     secBadge.textContent = `1枚 ${formatSec(getSec())}`;
     layers.forEach((l) => { l.classList.remove("on", "kb"); l.removeAttribute("src"); });
     player.hidden = false;
@@ -605,7 +615,7 @@
     try { player.requestFullscreen?.().catch(() => {}); } catch (e) {}
     show(0);
     setPlaying(true);
-    pokeHud();
+    showHud();
   }
 
   function stop() {
@@ -630,7 +640,7 @@
       // ズームの向きを毎回ランダムに
       img.style.setProperty("--kx", (Math.random() * 6 - 3).toFixed(1) + "%");
       img.style.setProperty("--ky", (Math.random() * 6 - 3).toFixed(1) + "%");
-      img.style.setProperty("--kb-dur", (getSec() + 1) + "s");
+      img.style.setProperty("--kb-dur", (getSec() * 1000 + fadeMs * 2) + "ms"); // フェードイン〜フェードアウトの間ずっと動かす
       void img.offsetWidth; // アニメーションを最初から再生させるための小技
       img.classList.add("kb");
     }
@@ -652,7 +662,7 @@
         finished = true;
         setPlaying(false);
         flash("最後まで再生しました");
-        pokeHud(true);
+        showHud();
         return;
       } else return;
     } else show(pos + 1);
@@ -685,9 +695,7 @@
     if (!playing) return;
     elapsed += ts - lastTs;
     lastTs = ts;
-    const total = getSec() * 1000;
-    bar.style.width = Math.min(100, (elapsed / total) * 100) + "%";
-    if (elapsed >= total) next(false);
+    if (elapsed >= getSec() * 1000) next(false);
     rafId = requestAnimationFrame(tick);
   }
 
@@ -711,12 +719,9 @@
     }
   });
 
-  // ===== 操作パネルの表示・自動非表示 =====
-  function pokeHud(keep) {
-    player.classList.remove("hud-hidden");
-    clearTimeout(hudTimer);
-    if (!keep && playing) hudTimer = setTimeout(() => player.classList.add("hud-hidden"), 2500);
-  }
+  // ===== 操作パネルの表示・非表示（タップで切り替え。勝手には消えない） =====
+  function showHud() { player.classList.remove("hud-hidden"); }
+  function toggleHud() { player.classList.toggle("hud-hidden"); }
   function flash(msg) {
     toast.textContent = msg; toast.hidden = false;
     clearTimeout(flash.t);
@@ -731,23 +736,19 @@
     if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
       // 左にスワイプ → 次、右にスワイプ → 前
       dx < 0 ? next(true) : prev();
-      pokeHud();
     } else if (Math.abs(dy) > 90 && dy > 0) {
       stop(); // 下にスワイプで閉じる
     } else if (Date.now() - downT < 400) {
-      if (player.classList.contains("hud-hidden")) pokeHud();
-      else { player.classList.add("hud-hidden"); clearTimeout(hudTimer); }
+      toggleHud(); // タップ1回で消える／もう1回で出る
     }
   });
-  player.addEventListener("mousemove", () => { if (!player.hidden) pokeHud(); });
 
   playBtn.addEventListener("click", () => {
     if (finished) { show(0); elapsed = 0; finished = false; }
     setPlaying(!playing);
-    pokeHud(!playing);
   });
-  $("nextBtn").addEventListener("click", () => { next(true); pokeHud(!playing); });
-  $("prevBtn").addEventListener("click", () => { prev(); pokeHud(!playing); });
+  $("nextBtn").addEventListener("click", () => next(true));
+  $("prevBtn").addEventListener("click", () => prev());
   $("closeBtn").addEventListener("click", stop);
   startBtn.addEventListener("click", start);
 
@@ -758,8 +759,6 @@
     else if (e.key === "ArrowLeft") prev();
     else if (e.key === " ") { e.preventDefault(); playBtn.click(); }
     else if (e.key === "Escape") stop();
-    else return;
-    pokeHud(!playing);
   });
 
   // ===== 起動 =====
