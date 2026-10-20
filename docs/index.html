@@ -1,0 +1,789 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="フォトリール">
+<meta name="theme-color" content="#15131a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<style>
+  /* claude.ai が自動で足してくれていた基本スタイルの代わり */
+  body { margin: 0; font-size: 14px; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+  /* ステータスバー（時計や電池の表示）に文字が隠れないよう上に余白 */
+  .wrap { padding-top: calc(28px + env(safe-area-inset-top, 0px)) !important; }
+</style><title>フォトリール</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&display=swap">
+<style>
+  /* レイアウト: 上から「写真を選ぶ → 秒数 → 見せ方 → 再生」の一本道。再生中は全画面のプレイヤーが上に重なる */
+  :root {
+    --bg: #15131a;          /* 暗室のような背景（写真が映える） */
+    --surface: #201d27;
+    --line: #34303d;
+    --fg: #f1ede6;
+    --muted: #a29cab;
+    --accent: #f0b54a;      /* 映写機のランプの琥珀色 */
+    --accent-ink: #1e1606;
+    --danger: #ff7a6b;
+    --font-display: "Zen Maru Gothic", "Hiragino Maru Gothic ProN", "Hiragino Sans", system-ui, sans-serif;
+    --font-body: -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+    color-scheme: dark;
+  }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-body);
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .wrap {
+    max-width: 640px;
+    margin: 0 auto;
+    padding-block: 28px 120px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+  header h1 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 30px;
+    letter-spacing: 0.02em;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  header h1 .reel {
+    width: 30px; height: 30px; border-radius: 50%;
+    border: 3px solid var(--accent);
+    background:
+      radial-gradient(circle at 50% 50%, var(--accent) 0 3px, transparent 4px),
+      radial-gradient(circle at 50% 22%, var(--bg) 0 3.5px, transparent 4.5px),
+      radial-gradient(circle at 50% 78%, var(--bg) 0 3.5px, transparent 4.5px),
+      radial-gradient(circle at 22% 50%, var(--bg) 0 3.5px, transparent 4.5px),
+      radial-gradient(circle at 78% 50%, var(--bg) 0 3.5px, transparent 4.5px),
+      var(--surface);
+  }
+  header p { margin: 6px 0 0; color: var(--muted); }
+
+  section { display: flex; flex-direction: column; gap: 12px; }
+  .label-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  h2 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 17px;
+    margin: 0;
+  }
+  .hint { color: var(--muted); font-size: 13px; }
+
+  /* ボタン類 */
+  button, .btn {
+    font: inherit;
+    color: inherit;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 10px 14px;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+  button:focus-visible, .btn:focus-within, input:focus-visible, select:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .pick-row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .btn.primary-pick {
+    flex: 1 1 200px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    background: var(--fg); color: var(--bg); border-color: var(--fg);
+    font-weight: 700; padding: 14px;
+    position: relative;
+  }
+  .btn.primary-pick input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .ghost { background: transparent; color: var(--muted); }
+
+  /* サムネイル一覧 */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+    gap: 6px;
+  }
+  .thumb {
+    position: relative;
+    aspect-ratio: 1;
+    max-width: 100%;
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb .num {
+    position: absolute; left: 4px; bottom: 4px;
+    font-size: 11px; font-variant-numeric: tabular-nums;
+    background: rgba(0,0,0,.6); color: #fff; padding: 0 5px; border-radius: 4px;
+  }
+  .thumb .rm {
+    position: absolute; top: 3px; right: 3px;
+    width: 24px; height: 24px; padding: 0; border-radius: 50%;
+    border: none; background: rgba(0,0,0,.6); color: #fff; font-size: 14px; line-height: 24px;
+  }
+  .sample-note {
+    font-size: 13px; color: var(--accent);
+    border: 1px dashed var(--accent); border-radius: 10px; padding: 8px 12px;
+  }
+
+  /* 秒数 */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    min-width: 56px; padding: 8px 12px; border-radius: 999px;
+    font-variant-numeric: tabular-nums;
+  }
+  .chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; }
+  .custom-sec {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 6px 12px;
+  }
+  .custom-sec input {
+    width: 5.5em; font: inherit; font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums;
+    background: transparent; color: var(--fg); border: none; text-align: right;
+  }
+  .custom-sec span { color: var(--muted); }
+
+  /* 見せ方の設定 */
+  .opts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 420px) { .opts { grid-template-columns: 1fr; } }
+  .opt {
+    display: flex; flex-direction: column; gap: 4px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+  }
+  .opt label { font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
+  .opt select {
+    font: inherit; color: var(--fg); background: transparent; border: none; padding: 2px 0;
+    appearance: none; -webkit-appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 10px) 55%, calc(100% - 5px) 55%;
+    background-size: 5px 5px; background-repeat: no-repeat;
+  }
+  .opt select option { background: var(--surface); }
+
+  /* 再生ボタン（画面下に固定） */
+  .start-bar {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    padding-top: 12px;
+    padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    background: linear-gradient(to top, var(--bg) 65%, transparent);
+    display: flex; justify-content: center;
+  }
+  .start {
+    width: 100%; max-width: 640px;
+    background: var(--accent); color: var(--accent-ink); border: none;
+    font-family: var(--font-display); font-weight: 700; font-size: 18px;
+    padding: 15px; border-radius: 16px;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+  }
+  .start small { font-family: var(--font-body); font-weight: 500; opacity: .75; font-size: 13px; }
+  .start:disabled { opacity: .4; }
+
+  /* ===== プレイヤー ===== */
+  #player {
+    position: fixed; inset: 0; z-index: 50;
+    background: #000; color: #fff;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none; -webkit-user-select: none;
+  }
+  .stage { position: absolute; inset: 0; }
+  .layer {
+    position: absolute; inset: 0; width: 100%; height: 100%; max-width: none;
+    object-fit: contain;
+    opacity: 0;
+    transition: opacity var(--fade, 800ms) ease;
+    will-change: opacity, transform;
+  }
+  #player.fit-cover .layer { object-fit: cover; }
+  .layer.on { opacity: 1; }
+  #player.trans-none .layer { transition: none; }
+  .layer.kb { animation: kenburns var(--kb-dur, 6s) linear forwards; }
+  @keyframes kenburns {
+    from { transform: scale(1) translate(0, 0); }
+    to   { transform: scale(1.12) translate(var(--kx, 0%), var(--ky, 0%)); }
+  }
+
+  .hud { position: absolute; left: 0; right: 0; transition: opacity .3s ease; }
+  #player.hud-hidden .hud { opacity: 0; pointer-events: none; }
+  #player.hud-hidden { cursor: none; }
+  .hud-top {
+    top: 0;
+    padding-top: calc(10px + env(safe-area-inset-top, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-bottom: 30px;
+    background: linear-gradient(to bottom, rgba(0,0,0,.6), transparent);
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  }
+  .counter { font-variant-numeric: tabular-nums; font-size: 14px; opacity: .9; }
+  .hud-bottom {
+    bottom: 0;
+    padding-top: 40px;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    background: linear-gradient(to top, rgba(0,0,0,.65), transparent);
+    display: flex; flex-direction: column; gap: 14px; align-items: center;
+  }
+  .controls { display: flex; align-items: center; gap: 22px; }
+  .icon-btn {
+    width: 52px; height: 52px; border-radius: 50%; padding: 0;
+    background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.18); color: #fff;
+    display: grid; place-items: center;
+  }
+  .icon-btn.big { width: 66px; height: 66px; background: var(--accent); color: var(--accent-ink); border: none; }
+  .icon-btn svg { width: 24px; height: 24px; fill: currentColor; }
+  .icon-btn.big svg { width: 28px; height: 28px; }
+  .close-btn { width: 40px; height: 40px; }
+  .close-btn svg { width: 18px; height: 18px; }
+  .sec-badge { font-size: 13px; font-variant-numeric: tabular-nums; opacity: .85; }
+
+  /* 進行バー（常に画面最下部に細く表示） */
+  .progress {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
+    background: rgba(255,255,255,.15);
+  }
+  .progress i { display: block; height: 100%; width: 0; background: var(--accent); }
+  #player.hud-hidden .progress { opacity: .55; }
+
+  .toast {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    background: rgba(0,0,0,.7); padding: 10px 18px; border-radius: 12px; font-size: 14px;
+    pointer-events: none; transition: opacity .3s;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .layer { transition: none; }
+    .layer.kb { animation: none; }
+  }
+</style>
+
+<main class="wrap">
+  <header>
+    <h1><span class="reel" aria-hidden="true"></span>フォトリール</h1>
+    <p>iPhoneの写真を選んで、1枚ごとの表示秒数を決めて再生します。</p>
+  </header>
+
+  <section aria-labelledby="h-photos">
+    <div class="label-row">
+      <h2 id="h-photos">1. 写真を選ぶ</h2>
+      <span class="hint" id="photoCount">0枚</span>
+    </div>
+    <div class="pick-row">
+      <label class="btn primary-pick">
+        <span id="pickLabel">＋ 写真ライブラリから選ぶ</span>
+        <input id="fileInput" type="file" accept="image/*" multiple>
+      </label>
+      <button id="clearBtn" class="ghost" type="button" hidden>すべて外す</button>
+    </div>
+    <p class="hint" style="margin:0">選ぶ画面の「アルバム」タブで、アルバムごとに写真を開けます。</p>
+    <div id="sampleNote" class="sample-note">いま並んでいるのはお試し用のサンプル画像です。写真を選ぶと入れ替わります。</div>
+    <div id="grid" class="grid" aria-live="polite"></div>
+  </section>
+
+  <section aria-labelledby="h-sec">
+    <h2 id="h-sec">2. 1枚あたりの表示秒数</h2>
+    <div class="chips" id="chips">
+      <button type="button" class="chip" data-sec="1">1秒</button>
+      <button type="button" class="chip" data-sec="3">3秒</button>
+      <button type="button" class="chip" data-sec="5">5秒</button>
+      <button type="button" class="chip" data-sec="10">10秒</button>
+      <button type="button" class="chip" data-sec="30">30秒</button>
+      <button type="button" class="chip" data-sec="60">1分</button>
+    </div>
+    <label class="custom-sec" for="secInput">
+      <span>自由に入力</span>
+      <input id="secInput" type="number" inputmode="decimal" min="0.5" max="3600" step="0.5" value="5">
+      <span>秒</span>
+    </label>
+  </section>
+
+  <section aria-labelledby="h-opt">
+    <h2 id="h-opt">3. 見せ方</h2>
+    <div class="opts">
+      <div class="opt">
+        <label for="orderSel">順番</label>
+        <select id="orderSel">
+          <option value="pick">選んだ順</option>
+          <option value="shuffle">シャッフル</option>
+        </select>
+      </div>
+      <div class="opt">
+        <label for="transSel">切り替え</label>
+        <select id="transSel">
+          <option value="fade">フェード</option>
+          <option value="kenburns">ゆっくりズーム</option>
+          <option value="none">パッと切り替え</option>
+        </select>
+      </div>
+      <div class="opt">
+        <label for="fitSel">表示サイズ</label>
+        <select id="fitSel">
+          <option value="contain">写真全体を表示</option>
+          <option value="cover">画面いっぱい（端を切る）</option>
+        </select>
+      </div>
+      <div class="opt">
+        <label for="loopSel">最後まで行ったら</label>
+        <select id="loopSel">
+          <option value="loop">最初から繰り返す</option>
+          <option value="stop">止まる</option>
+        </select>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="start-bar">
+  <button id="startBtn" class="start" type="button">▶ 再生する <small id="startInfo"></small></button>
+</div>
+
+<!-- 再生画面 -->
+<div id="player" hidden>
+  <div class="stage" id="stage">
+    <img class="layer" id="layerA" alt="">
+    <img class="layer" id="layerB" alt="">
+  </div>
+  <div class="hud hud-top">
+    <span class="counter" id="counter">1 / 1</span>
+    <button class="icon-btn close-btn" id="closeBtn" type="button" aria-label="閉じる">
+      <svg viewBox="0 0 24 24"><path d="M5.3 4 12 10.7 18.7 4 20 5.3 13.3 12 20 18.7 18.7 20 12 13.3 5.3 20 4 18.7 10.7 12 4 5.3z"/></svg>
+    </button>
+  </div>
+  <div class="hud hud-bottom">
+    <div class="controls">
+      <button class="icon-btn" id="prevBtn" type="button" aria-label="前の写真">
+        <svg viewBox="0 0 24 24"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg>
+      </button>
+      <button class="icon-btn big" id="playBtn" type="button" aria-label="一時停止">
+        <svg viewBox="0 0 24 24" id="playIcon"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>
+      </button>
+      <button class="icon-btn" id="nextBtn" type="button" aria-label="次の写真">
+        <svg viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg>
+      </button>
+    </div>
+    <span class="sec-badge" id="secBadge"></span>
+  </div>
+  <div class="progress"><i id="bar"></i></div>
+  <div class="toast" id="toast" hidden></div>
+</div>
+
+<script>
+(() => {
+  // ===== 要素の取得 =====
+  const $ = (id) => document.getElementById(id);
+  const fileInput = $("fileInput"), grid = $("grid"), photoCount = $("photoCount");
+  const clearBtn = $("clearBtn"), sampleNote = $("sampleNote"), pickLabel = $("pickLabel");
+  const chips = $("chips"), secInput = $("secInput");
+  const orderSel = $("orderSel"), transSel = $("transSel"), fitSel = $("fitSel"), loopSel = $("loopSel");
+  const startBtn = $("startBtn"), startInfo = $("startInfo");
+  const player = $("player"), layers = [$("layerA"), $("layerB")];
+  const counter = $("counter"), bar = $("bar"), secBadge = $("secBadge"), toast = $("toast");
+  const playBtn = $("playBtn"), playIcon = $("playIcon");
+
+  const ICON_PAUSE = '<path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/>';
+  const ICON_PLAY = '<path d="M8 5v14l11-7z"/>';
+
+  // ===== 状態 =====
+  // items: { url: 表示用URL, thumb: サムネイルURL, sample: サンプルかどうか }
+  let items = [];
+  let usingSamples = true;
+
+  // ===== 設定の保存・読み込み（使えない環境でも動くよう try/catch） =====
+  const STORE_KEY = "photoreel-settings";
+  function loadSettings() {
+    try {
+      const s = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
+      if (s.sec) secInput.value = s.sec;
+      if (s.order) orderSel.value = s.order;
+      if (s.trans) transSel.value = s.trans;
+      if (s.fit) fitSel.value = s.fit;
+      if (s.loop) loopSel.value = s.loop;
+    } catch (e) { /* 保存できない環境では初期値のまま */ }
+  }
+  function saveSettings() {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify({
+        sec: secInput.value, order: orderSel.value, trans: transSel.value,
+        fit: fitSel.value, loop: loopSel.value,
+      }));
+    } catch (e) { /* 無視 */ }
+  }
+
+  // ===== 秒数の扱い =====
+  function getSec() {
+    const v = parseFloat(secInput.value);
+    if (!isFinite(v)) return 5;
+    return Math.min(3600, Math.max(0.5, v)); // 0.5秒〜1時間に収める
+  }
+  function formatSec(s) {
+    if (s >= 60 && s % 60 === 0) return `${s / 60}分`;
+    return `${s}秒`;
+  }
+  function formatTotal(totalSec) {
+    const m = Math.floor(totalSec / 60), s = Math.round(totalSec % 60);
+    return m > 0 ? `合計 約${m}分${s ? s + "秒" : ""}` : `合計 約${s}秒`;
+  }
+  function syncChips() {
+    const s = getSec();
+    chips.querySelectorAll(".chip").forEach((c) => {
+      c.setAttribute("aria-pressed", String(parseFloat(c.dataset.sec) === s));
+    });
+    updateSummary();
+  }
+  chips.addEventListener("click", (e) => {
+    const c = e.target.closest(".chip");
+    if (!c) return;
+    secInput.value = c.dataset.sec;
+    syncChips(); saveSettings();
+  });
+  secInput.addEventListener("input", () => { syncChips(); saveSettings(); });
+  secInput.addEventListener("change", () => { secInput.value = getSec(); syncChips(); });
+  [orderSel, transSel, fitSel, loopSel].forEach((el) => el.addEventListener("change", saveSettings));
+
+  // ===== サンプル画像を canvas で作る =====
+  const SAMPLES = [
+    { a: "#ff9a5a", b: "#5a2a6e", label: "夕焼けの海" },
+    { a: "#9fe0c8", b: "#1f5b5e", label: "朝の森" },
+    { a: "#ffd36e", b: "#d0603a", label: "パン屋の朝" },
+    { a: "#a7c1ff", b: "#2a2f6e", label: "冬の夜" },
+    { a: "#ffc2d1", b: "#7a3b5c", label: "春の公園" },
+  ];
+  function makeSample(s, i) {
+    return new Promise((resolve) => {
+      const c = document.createElement("canvas");
+      c.width = 1200; c.height = 800;
+      const g = c.getContext("2d");
+      const grad = g.createLinearGradient(0, 0, 0, 800);
+      grad.addColorStop(0, s.a); grad.addColorStop(1, s.b);
+      g.fillStyle = grad; g.fillRect(0, 0, 1200, 800);
+      // 丸い光（太陽や月のイメージ）
+      g.fillStyle = "rgba(255,255,255,.35)";
+      g.beginPath(); g.arc(300 + i * 160, 320, 110, 0, Math.PI * 2); g.fill();
+      // 丘のシルエット
+      g.fillStyle = "rgba(0,0,0,.22)";
+      g.beginPath(); g.moveTo(0, 620);
+      for (let x = 0; x <= 1200; x += 40) g.lineTo(x, 600 + Math.sin(x / 140 + i) * 40);
+      g.lineTo(1200, 800); g.lineTo(0, 800); g.fill();
+      g.fillStyle = "#fff";
+      g.font = "bold 64px 'Hiragino Sans', sans-serif";
+      g.fillText(s.label, 70, 140);
+      g.font = "32px sans-serif";
+      g.fillText(`サンプル ${i + 1} / ${SAMPLES.length}`, 70, 195);
+      c.toBlob((blob) => {
+        const url = URL.createObjectURL(blob);
+        resolve({ url, thumb: url, sample: true });
+      }, "image/jpeg", 0.85);
+    });
+  }
+  async function loadSamples() {
+    items = await Promise.all(SAMPLES.map(makeSample));
+    usingSamples = true;
+    renderGrid();
+  }
+
+  // ===== 写真の読み込み =====
+  // 大きな写真をそのままサムネイルにするとiPhoneのメモリを圧迫するので、小さく縮めてから並べる
+  function makeThumb(url) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const size = 200;
+        const scale = size / Math.min(img.naturalWidth, img.naturalHeight);
+        const w = Math.round(img.naturalWidth * scale), h = Math.round(img.naturalHeight * scale);
+        const c = document.createElement("canvas");
+        c.width = size; c.height = size;
+        c.getContext("2d").drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
+        c.toBlob((b) => resolve(b ? URL.createObjectURL(b) : url), "image/jpeg", 0.7);
+        img.src = ""; // 元画像のデコード結果を手放す
+      };
+      img.onerror = () => resolve(null); // 読めない形式はスキップ
+      img.src = url;
+    });
+  }
+
+  fileInput.addEventListener("change", async () => {
+    const files = Array.from(fileInput.files || []).filter((f) => f.type.startsWith("image/") || /\.(heic|heif)$/i.test(f.name));
+    fileInput.value = ""; // 同じ写真をもう一度選べるようにリセット
+    if (!files.length) return;
+    if (usingSamples) { revokeAll(); items = []; usingSamples = false; }
+
+    // 先に枠だけ並べ、サムネイルは1枚ずつ順番に作る
+    const added = files.map((f) => ({ url: URL.createObjectURL(f), thumb: null, sample: false }));
+    items.push(...added);
+    renderGrid();
+    for (const it of added) {
+      it.thumb = await makeThumb(it.url);
+      if (it.thumb === null) {               // 表示できない画像は外す
+        URL.revokeObjectURL(it.url);
+        items = items.filter((x) => x !== it);
+      }
+      renderGrid();
+    }
+  });
+
+  function revokeAll() {
+    items.forEach((it) => {
+      URL.revokeObjectURL(it.url);
+      if (it.thumb && it.thumb !== it.url) URL.revokeObjectURL(it.thumb);
+    });
+  }
+  clearBtn.addEventListener("click", () => { revokeAll(); loadSamples(); });
+
+  function renderGrid() {
+    grid.innerHTML = "";
+    items.forEach((it, i) => {
+      const d = document.createElement("div");
+      d.className = "thumb";
+      if (it.thumb) {
+        const img = document.createElement("img");
+        img.src = it.thumb; img.alt = `写真 ${i + 1}`; img.loading = "lazy";
+        d.appendChild(img);
+      }
+      const n = document.createElement("span");
+      n.className = "num"; n.textContent = i + 1;
+      d.appendChild(n);
+      if (!it.sample) {
+        const rm = document.createElement("button");
+        rm.className = "rm"; rm.type = "button"; rm.textContent = "×";
+        rm.setAttribute("aria-label", `写真 ${i + 1} を外す`);
+        rm.addEventListener("click", () => {
+          URL.revokeObjectURL(it.url);
+          if (it.thumb && it.thumb !== it.url) URL.revokeObjectURL(it.thumb);
+          items = items.filter((x) => x !== it);
+          if (!items.length) loadSamples(); else renderGrid();
+        });
+        d.appendChild(rm);
+      }
+      grid.appendChild(d);
+    });
+    sampleNote.hidden = !usingSamples;
+    clearBtn.hidden = usingSamples;
+    pickLabel.textContent = usingSamples ? "＋ 写真ライブラリから選ぶ" : "＋ 写真を追加する";
+    photoCount.textContent = usingSamples ? "サンプル " + items.length + "枚" : items.length + "枚";
+    updateSummary();
+  }
+
+  function updateSummary() {
+    startBtn.disabled = items.length === 0;
+    startInfo.textContent = items.length ? `${items.length}枚 × ${formatSec(getSec())}・${formatTotal(items.length * getSec())}` : "";
+  }
+
+  // ===== プレイヤー =====
+  let order = [], pos = 0, playing = false, elapsed = 0, lastTs = 0, rafId = 0;
+  let front = 0;            // いま表示中のレイヤー（0 か 1）
+  let hudTimer = 0, wakeLock = null, finished = false;
+
+  function shuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  function start() {
+    if (!items.length) return;
+    saveSettings();
+    const idx = items.map((_, i) => i);
+    order = orderSel.value === "shuffle" ? shuffle(idx) : idx;
+    pos = 0; elapsed = 0; finished = false;
+    player.classList.toggle("fit-cover", fitSel.value === "cover");
+    player.classList.toggle("trans-none", transSel.value === "none");
+    const fade = Math.min(800, getSec() * 1000 * 0.4); // 秒数が短いときはフェードも短く
+    player.style.setProperty("--fade", fade + "ms");
+    secBadge.textContent = `1枚 ${formatSec(getSec())}`;
+    layers.forEach((l) => { l.classList.remove("on", "kb"); l.removeAttribute("src"); });
+    player.hidden = false;
+    document.body.style.overflow = "hidden";
+    // パソコンでは本物の全画面にする（iPhoneは非対応なので失敗しても無視）
+    try { player.requestFullscreen?.().catch(() => {}); } catch (e) {}
+    show(0);
+    setPlaying(true);
+    pokeHud();
+  }
+
+  function stop() {
+    setPlaying(false);
+    cancelAnimationFrame(rafId);
+    player.hidden = true;
+    document.body.style.overflow = "";
+    try { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); } catch (e) {}
+    layers.forEach((l) => { l.classList.remove("on", "kb"); l.removeAttribute("src"); });
+  }
+
+  async function show(p) {
+    pos = p;
+    const it = items[order[pos]];
+    const back = 1 - front;
+    const img = layers[back];
+    img.classList.remove("kb");
+    img.src = it.url;
+    try { await img.decode(); } catch (e) { /* デコード失敗時もそのまま表示を試みる */ }
+    if (pos !== p) return; // デコード中に別の写真へ移動していたら中止
+    if (transSel.value === "kenburns") {
+      // ズームの向きを毎回ランダムに
+      img.style.setProperty("--kx", (Math.random() * 6 - 3).toFixed(1) + "%");
+      img.style.setProperty("--ky", (Math.random() * 6 - 3).toFixed(1) + "%");
+      img.style.setProperty("--kb-dur", (getSec() + 1) + "s");
+      void img.offsetWidth; // アニメーションを最初から再生させるための小技
+      img.classList.add("kb");
+    }
+    img.classList.add("on");
+    layers[front].classList.remove("on");
+    front = back;
+    counter.textContent = `${pos + 1} / ${order.length}`;
+    // 次の写真を先に読み込んでおく（切り替えがカクつかないように）
+    const nextIt = items[order[(pos + 1) % order.length]];
+    if (nextIt) { const pre = new Image(); pre.src = nextIt.url; }
+  }
+
+  function next(manual) {
+    if (pos + 1 >= order.length) {
+      if (loopSel.value === "loop") {
+        if (orderSel.value === "shuffle" && !manual) order = shuffle(order);
+        show(0);
+      } else if (!manual) {
+        finished = true;
+        setPlaying(false);
+        flash("最後まで再生しました");
+        pokeHud(true);
+        return;
+      } else return;
+    } else show(pos + 1);
+    elapsed = 0; finished = false;
+  }
+  function prev() {
+    if (pos > 0) show(pos - 1);
+    else if (loopSel.value === "loop") show(order.length - 1);
+    elapsed = 0; finished = false;
+  }
+
+  function setPlaying(v) {
+    playing = v;
+    playIcon.innerHTML = v ? ICON_PAUSE : ICON_PLAY;
+    playBtn.setAttribute("aria-label", v ? "一時停止" : "再生");
+    // ズーム演出も一緒に止める
+    layers.forEach((l) => (l.style.animationPlayState = v ? "running" : "paused"));
+    if (v) {
+      lastTs = performance.now();
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(tick);
+      requestWakeLock();
+    } else {
+      releaseWakeLock();
+    }
+  }
+
+  // 毎フレーム経過時間を数え、指定秒数に達したら次へ
+  function tick(ts) {
+    if (!playing) return;
+    elapsed += ts - lastTs;
+    lastTs = ts;
+    const total = getSec() * 1000;
+    bar.style.width = Math.min(100, (elapsed / total) * 100) + "%";
+    if (elapsed >= total) next(false);
+    rafId = requestAnimationFrame(tick);
+  }
+
+  // ===== 画面スリープを防ぐ（対応環境のみ） =====
+  async function requestWakeLock() {
+    try {
+      if ("wakeLock" in navigator && !wakeLock) {
+        wakeLock = await navigator.wakeLock.request("screen");
+        wakeLock.addEventListener("release", () => { wakeLock = null; });
+      }
+    } catch (e) { wakeLock = null; }
+  }
+  function releaseWakeLock() {
+    try { wakeLock?.release(); } catch (e) {}
+    wakeLock = null;
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && playing) {
+      lastTs = performance.now();
+      requestWakeLock();
+    }
+  });
+
+  // ===== 操作パネルの表示・自動非表示 =====
+  function pokeHud(keep) {
+    player.classList.remove("hud-hidden");
+    clearTimeout(hudTimer);
+    if (!keep && playing) hudTimer = setTimeout(() => player.classList.add("hud-hidden"), 2500);
+  }
+  function flash(msg) {
+    toast.textContent = msg; toast.hidden = false;
+    clearTimeout(flash.t);
+    flash.t = setTimeout(() => (toast.hidden = true), 1600);
+  }
+
+  // ===== タップ・スワイプ操作 =====
+  let downX = 0, downY = 0, downT = 0;
+  $("stage").addEventListener("pointerdown", (e) => { downX = e.clientX; downY = e.clientY; downT = Date.now(); });
+  $("stage").addEventListener("pointerup", (e) => {
+    const dx = e.clientX - downX, dy = e.clientY - downY;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
+      // 左にスワイプ → 次、右にスワイプ → 前
+      dx < 0 ? next(true) : prev();
+      pokeHud();
+    } else if (Math.abs(dy) > 90 && dy > 0) {
+      stop(); // 下にスワイプで閉じる
+    } else if (Date.now() - downT < 400) {
+      if (player.classList.contains("hud-hidden")) pokeHud();
+      else { player.classList.add("hud-hidden"); clearTimeout(hudTimer); }
+    }
+  });
+  player.addEventListener("mousemove", () => { if (!player.hidden) pokeHud(); });
+
+  playBtn.addEventListener("click", () => {
+    if (finished) { show(0); elapsed = 0; finished = false; }
+    setPlaying(!playing);
+    pokeHud(!playing);
+  });
+  $("nextBtn").addEventListener("click", () => { next(true); pokeHud(!playing); });
+  $("prevBtn").addEventListener("click", () => { prev(); pokeHud(!playing); });
+  $("closeBtn").addEventListener("click", stop);
+  startBtn.addEventListener("click", start);
+
+  // キーボード操作（パソコン用）
+  document.addEventListener("keydown", (e) => {
+    if (player.hidden) return;
+    if (e.key === "ArrowRight") next(true);
+    else if (e.key === "ArrowLeft") prev();
+    else if (e.key === " ") { e.preventDefault(); playBtn.click(); }
+    else if (e.key === "Escape") stop();
+    else return;
+    pokeHud(!playing);
+  });
+
+  // ===== 起動 =====
+  loadSettings();
+  syncChips();
+  loadSamples();
+})();
+</script>
+
+</html>
