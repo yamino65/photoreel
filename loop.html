@@ -1,0 +1,635 @@
+<title>ループPiP</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&display=swap">
+<style>
+  /* レイアウト: 上から「動画を選ぶ → 設定 → PiPで再生」の一本道。フォトリールと同じ配色 */
+  :root {
+    --bg: #15131a;
+    --surface: #201d27;
+    --line: #34303d;
+    --fg: #f1ede6;
+    --muted: #a29cab;
+    --accent: #f0b54a;
+    --accent-ink: #1e1606;
+    --danger: #ff7a6b;
+    --font-display: "Zen Maru Gothic", "Hiragino Maru Gothic ProN", "Hiragino Sans", system-ui, sans-serif;
+    --font-body: -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+    color-scheme: dark;
+  }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-body);
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .wrap {
+    max-width: 640px;
+    margin: 0 auto;
+    padding-block: 28px 120px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+  header h1 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 30px;
+    letter-spacing: 0.02em;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  /* ぐるっと回る矢印のロゴ */
+  header h1 .mark {
+    width: 30px; height: 30px; border-radius: 50%;
+    border: 3px solid var(--accent); border-right-color: transparent;
+    position: relative;
+  }
+  header h1 .mark::after {
+    content: ""; position: absolute; right: -6px; top: 1px;
+    border: 6px solid transparent; border-top-color: var(--accent);
+  }
+  header p { margin: 6px 0 0; color: var(--muted); }
+  header a { color: var(--muted); font-size: 13px; }
+
+  section { display: flex; flex-direction: column; gap: 12px; }
+  .label-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  h2 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 17px;
+    margin: 0;
+  }
+  .hint { color: var(--muted); font-size: 13px; margin: 0; }
+
+  button, .btn {
+    font: inherit;
+    color: inherit;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 10px 14px;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+  button:focus-visible, .btn:focus-within, select:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .btn.primary-pick {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    background: var(--fg); color: var(--bg); border-color: var(--fg);
+    font-weight: 700; padding: 14px;
+    position: relative;
+  }
+  .btn.primary-pick input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+  /* プレビュー */
+  .preview {
+    position: relative;
+    background: #000; border-radius: 14px; overflow: hidden;
+    aspect-ratio: 16 / 9;
+    display: grid; place-items: center;
+  }
+  .preview video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .preview .empty { position: absolute; color: var(--muted); font-size: 14px; }
+  .meta { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; margin: 0; word-break: break-all; }
+
+  /* 設定 */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { min-width: 64px; padding: 8px 12px; border-radius: 999px; }
+  .chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; }
+
+  .status { font-size: 14px; margin: 0; min-height: 1.6em; }
+  .status.err { color: var(--danger); }
+
+  /* 下に固定のボタン */
+  .start-bar {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    padding-top: 12px;
+    padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    background: linear-gradient(to top, var(--bg) 65%, transparent);
+    display: flex; justify-content: center; gap: 10px;
+  }
+  .start {
+    flex: 1; max-width: 640px;
+    background: var(--accent); color: var(--accent-ink); border: none;
+    font-family: var(--font-display); font-weight: 700; font-size: 18px;
+    padding: 15px; border-radius: 16px;
+  }
+  .start:disabled { opacity: .4; }
+  .stop-btn { border-radius: 16px; padding: 15px 18px; }
+</style>
+
+<main class="wrap">
+  <header>
+    <h1><span class="mark" aria-hidden="true"></span>ループPiP</h1>
+    <p>iPhoneの動画を選んで、ピクチャ・イン・ピクチャで同じ動画をくり返し再生します。1周ごとに再生ボタンなどのメニューが出ません。</p>
+    <a href="./">← フォトリール（写真のスライドショー）へ</a>
+  </header>
+
+  <section aria-labelledby="h-video">
+    <h2 id="h-video">1. 動画を選ぶ</h2>
+    <label class="btn primary-pick">
+      <span id="pickLabel">＋ 写真ライブラリから動画を選ぶ</span>
+      <input id="fileInput" type="file" accept="video/*">
+    </label>
+    <div class="preview">
+      <video id="video" playsinline muted loop autopictureinpicture></video>
+      <span class="empty" id="emptyNote">まだ動画が選ばれていません</span>
+    </div>
+    <p class="meta" id="meta"></p>
+  </section>
+
+  <section aria-labelledby="h-len">
+    <div class="label-row">
+      <h2 id="h-len">2. 途切れずにくり返す長さ</h2>
+    </div>
+    <div class="chips" id="lenChips">
+      <button type="button" class="chip" data-min="30">30分</button>
+      <button type="button" class="chip" data-min="60">1時間</button>
+      <button type="button" class="chip" data-min="180">3時間</button>
+    </div>
+    <p class="hint">この長さのあいだは、つなぎ目でメニューが出ません。過ぎると最初に戻ってくり返します（そのとき1回だけメニューが出ることがあります）。</p>
+  </section>
+
+  <section aria-labelledby="h-sound">
+    <h2 id="h-sound">3. 音</h2>
+    <div class="chips" id="soundChips">
+      <button type="button" class="chip" data-sound="on">音あり</button>
+      <button type="button" class="chip" data-sound="off">音なし</button>
+    </div>
+  </section>
+
+  <p class="status" id="status" role="status"></p>
+</main>
+
+<div class="start-bar">
+  <button id="pipBtn" class="start" type="button" disabled>ピクチャ・イン・ピクチャで再生</button>
+  <button id="stopBtn" class="stop-btn" type="button" hidden>止める</button>
+</div>
+
+<script>
+// ===== 動画ファイルの「目次」を組み替えて、長い1本の動画にする =====
+// MP4/MOV ファイルは「箱（ボックス）」の入れ子でできている。
+//   moov = 目次（何コマ目がファイルのどこにあり、何秒表示するか）
+//   mdat = 中身（映像・音声のデータそのもの）
+// 目次だけを「同じコマを何百回も並べた目次」に書き換え、中身は元のファイルをそのまま指す。
+// → 再エンコード不要で一瞬。ファイルもほぼ元の大きさのまま、再生上は何時間もの1本の動画になる。
+//   巻き戻し（シーク）が起きないので、PiP でつなぎ目ごとにメニューが出ない。
+const LoopMp4 = (() => {
+  const str4 = (u8, p) => String.fromCharCode(u8[p], u8[p + 1], u8[p + 2], u8[p + 3]);
+  const view = (u8) => new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const ascii = (s) => Uint8Array.from(s, (c) => c.charCodeAt(0));
+
+  // u8 の start〜end にある箱を並べて返す
+  function parseBoxes(u8, start, end) {
+    const dv = view(u8), out = [];
+    let p = start;
+    while (p + 8 <= end) {
+      let size = dv.getUint32(p), hdr = 8;
+      if (size === 1) { size = Number(dv.getBigUint64(p + 8)); hdr = 16; }
+      else if (size === 0) size = end - p;
+      if (size < hdr || p + size > end) break;
+      out.push({ type: str4(u8, p + 4), start: p, end: p + size, body: p + hdr });
+      p += size;
+    }
+    return out;
+  }
+  const findBox = (list, type) => list.find((b) => b.type === type);
+
+  // ファイル全体の一番外側の箱を、頭の部分だけ読んで並べる（大きな動画を丸ごと読まない）
+  async function readTopBoxes(file) {
+    const out = [];
+    let p = 0;
+    while (p + 8 <= file.size) {
+      const h = new Uint8Array(await file.slice(p, Math.min(p + 16, file.size)).arrayBuffer());
+      const dv = view(h);
+      let size = dv.getUint32(0), hdr = 8;
+      if (size === 1 && h.length >= 16) { size = Number(dv.getBigUint64(8)); hdr = 16; }
+      else if (size === 0) size = file.size - p;
+      if (size < hdr) break;
+      out.push({ type: str4(h, 4), start: p, size });
+      p += size;
+    }
+    return out;
+  }
+
+  // 1本の線路（映像 or 音声のトラック）の目次を読み取る
+  function readTrack(u8, trak) {
+    const dv = view(u8);
+    const kids = parseBoxes(u8, trak.body, trak.end);
+    const tkhd = findBox(kids, "tkhd"), mdia = findBox(kids, "mdia"), edts = findBox(kids, "edts");
+    if (!tkhd || !mdia) return null;
+    const mk = parseBoxes(u8, mdia.body, mdia.end);
+    const mdhd = findBox(mk, "mdhd"), hdlr = findBox(mk, "hdlr"), minf = findBox(mk, "minf");
+    if (!mdhd || !hdlr || !minf) return null;
+    const kind = str4(u8, hdlr.body + 8);                        // "vide"=映像, "soun"=音声
+    const timescale = dv.getUint32(mdhd.body + (u8[mdhd.body] === 1 ? 20 : 12)); // 1秒を何目盛りで数えるか
+    const fk = parseBoxes(u8, minf.body, minf.end);
+    const stbl = findBox(fk, "stbl");
+    if (!stbl) return null;
+    const sk = parseBoxes(u8, stbl.body, stbl.end);
+    const stsd = findBox(sk, "stsd"), stts = findBox(sk, "stts"), stsz = findBox(sk, "stsz"), stsc = findBox(sk, "stsc");
+    const stco = findBox(sk, "stco"), co64 = findBox(sk, "co64"), ctts = findBox(sk, "ctts"), stss = findBox(sk, "stss");
+    if (!stsd || !stts || !stsz || !stsc || !(stco || co64)) return null;
+    const format = str4(u8, stsd.body + 12);                      // "avc1" "hvc1" "mp4a" など
+
+    // サンプル（映像なら1コマ、音声なら音の1かたまり）ごとのバイト数
+    let b = stsz.body;
+    const constSize = dv.getUint32(b + 4), count = dv.getUint32(b + 8);
+    const sizes = constSize ? null : new Uint32Array(count);
+    if (sizes) for (let i = 0; i < count; i++) sizes[i] = dv.getUint32(b + 12 + i * 4);
+
+    // サンプルごとの表示時間
+    const durs = new Uint32Array(count);
+    b = stts.body;
+    let k = 0;
+    for (let i = 0, n = dv.getUint32(b + 4); i < n; i++) {
+      const c = dv.getUint32(b + 8 + i * 8), d = dv.getUint32(b + 12 + i * 8);
+      for (let j = 0; j < c && k < count; j++) durs[k++] = d;
+    }
+    for (; k < count; k++) durs[k] = k ? durs[k - 1] : 1;
+
+    // 表示順のずれ（Bフレームがある動画で使う）
+    let cto = null, cttsVer = 0;
+    if (ctts) {
+      cttsVer = u8[ctts.body];
+      cto = new Int32Array(count);
+      b = ctts.body; k = 0;
+      for (let i = 0, n = dv.getUint32(b + 4); i < n; i++) {
+        const c = dv.getUint32(b + 8 + i * 8), o = dv.getInt32(b + 12 + i * 8);
+        for (let j = 0; j < c && k < count; j++) cto[k++] = o;
+      }
+    }
+
+    // キーフレーム（単独で絵になるコマ）の印。箱が無ければ全部キーフレーム
+    let sync = null;
+    if (stss) {
+      sync = new Uint8Array(count);
+      b = stss.body;
+      for (let i = 0, n = dv.getUint32(b + 4); i < n; i++) {
+        const s = dv.getUint32(b + 8 + i * 4);
+        if (s >= 1 && s <= count) sync[s - 1] = 1;
+      }
+    }
+
+    // チャンク（ファイル内で連続して置かれたサンプルのかたまり）の位置と数
+    const offs = [];
+    if (co64) { b = co64.body; for (let i = 0, n = dv.getUint32(b + 4); i < n; i++) offs.push(Number(dv.getBigUint64(b + 8 + i * 8))); }
+    else { b = stco.body; for (let i = 0, n = dv.getUint32(b + 4); i < n; i++) offs.push(dv.getUint32(b + 8 + i * 4)); }
+    const chunks = [];
+    b = stsc.body;
+    for (let i = 0, n = dv.getUint32(b + 4); i < n; i++) {
+      const first = dv.getUint32(b + 8 + i * 12), spc = dv.getUint32(b + 12 + i * 12), sdi = dv.getUint32(b + 16 + i * 12);
+      const last = i + 1 < n ? dv.getUint32(b + 8 + (i + 1) * 12) - 1 : offs.length;
+      for (let c = first; c <= last && c <= offs.length; c++) chunks.push({ off: offs[c - 1], n: spc, sdi });
+    }
+
+    // 編集リスト（頭の何目盛りを飛ばして再生するか）。音声の無音の頭出しなどに使われている
+    let mediaTime = 0;
+    const elst = edts && findBox(parseBoxes(u8, edts.body, edts.end), "elst");
+    if (elst) {
+      const v = u8[elst.body];
+      let p = elst.body + 8;
+      for (let i = 0, n = dv.getUint32(elst.body + 4); i < n; i++, p += v === 1 ? 20 : 12) {
+        const mt = v === 1 ? Number(dv.getBigInt64(p + 8)) : dv.getInt32(p + 4);
+        if (mt >= 0) { mediaTime = mt; break; }
+      }
+    }
+
+    return { kind, format, timescale, u8, tkhd, mdhd, hdlr, fk, stsd, count, constSize, sizes, durs, cto, cttsVer, sync, chunks, mediaTime };
+  }
+
+  // ---- 箱を作る道具 ----
+  function box(type, parts) {
+    const len = 8 + parts.reduce((s, x) => s + x.length, 0);
+    const out = new Uint8Array(len);
+    view(out).setUint32(0, len);
+    out.set(ascii(type), 4);
+    let p = 8;
+    for (const x of parts) { out.set(x, p); p += x.length; }
+    return out;
+  }
+  function fullBox(type, ver, flags, parts) {
+    return box(type, [new Uint8Array([ver, (flags >> 16) & 255, (flags >> 8) & 255, flags & 255]), ...parts]);
+  }
+  function u32s(arr) {
+    const out = new Uint8Array(arr.length * 4), dv = view(out);
+    for (let i = 0; i < arr.length; i++) dv.setUint32(i * 4, arr[i] >>> 0); // マイナスの値もそのまま2の補数で書く
+    return out;
+  }
+  // 元の箱をコピーし、中の「長さ」欄だけ書き換える（tkhd/mdhd/mvhd 共通）
+  function withDuration(u8, b, dur, v0At, v1At) {
+    const out = u8.slice(b.start, b.end), dv = view(out), o = b.body - b.start;
+    if (out[o] === 1) dv.setBigUint64(o + v1At, BigInt(dur));
+    else dv.setUint32(o + v0At, dur);
+    return out;
+  }
+
+  // 同じ値が続く所をまとめる（[回数, 値] の並びにする）
+  function runs(arr, from, to) {
+    const out = [];
+    for (let i = from; i < to; i++) {
+      const r = out[out.length - 1];
+      if (r && r[1] === arr[i]) r[0]++; else out.push([1, arr[i]]);
+    }
+    return out;
+  }
+
+  // 1本の線路を reps 回くり返した目次（trak 箱）を作る
+  function buildTrak(t, reps, loopSec, movieDur, offsetOf) {
+    const target = loopSec * t.timescale; // 1周の長さ（この線路の目盛り）
+
+    // 1周で使うサンプル数 K：映像の長さに収まるところまで（音声が少し長い場合は切りそろえる）
+    let K = 0, acc = 0;
+    while (K < t.count && acc < target - 0.5) acc += t.durs[K++];
+    K = Math.max(1, K);
+    const chunks = [];
+    let left = K;
+    for (const c of t.chunks) {
+      if (left <= 0) break;
+      const n = Math.min(c.n, left);
+      chunks.push({ off: offsetOf(c.off), n, sdi: c.sdi });
+      left -= n;
+    }
+    K -= left; // 目次が壊れていてチャンクが足りない場合
+    let lastStart = 0;
+    for (let i = 0; i < K - 1; i++) lastStart += t.durs[i];
+
+    // 表示時間：1周の最後のサンプルの長さを調整して、映像と音声がずれていかないようにする
+    const base = runs(t.durs, 0, K - 1);
+    const stts = [];
+    let mediaDur = 0;
+    for (let j = 0; j < reps; j++) {
+      const end = Math.round((j + 1) * target);
+      const last = Math.max(1, end - mediaDur - lastStart);
+      for (const r of base) stts.push(r[0], r[1]);
+      stts.push(1, last);
+      mediaDur += lastStart + last;
+    }
+
+    const parts = [u8Slice(t.u8, t.stsd), fullBox("stts", 0, 0, [u32s([stts.length / 2]), u32s(stts)])];
+
+    if (t.cto) {
+      const cr = runs(t.cto, 0, K), flat = [];
+      for (const r of cr) flat.push(r[0], r[1]);
+      const all = new Uint32Array(flat.length * reps);
+      for (let j = 0; j < reps; j++) all.set(flat.map((v) => v >>> 0), j * flat.length);
+      parts.push(fullBox("ctts", t.cttsVer, 0, [u32s([cr.length * reps]), u32s(all)]));
+    }
+    if (t.sync) {
+      const keys = [];
+      for (let i = 0; i < K; i++) if (t.sync[i]) keys.push(i + 1);
+      const all = new Uint32Array(keys.length * reps);
+      for (let j = 0; j < reps; j++) for (let i = 0; i < keys.length; i++) all[j * keys.length + i] = keys[i] + j * K;
+      parts.push(fullBox("stss", 0, 0, [u32s([all.length]), u32s(all)]));
+    }
+
+    // チャンクごとのサンプル数（同じ並びが続く所はまとめる）
+    const stsc = [];
+    let prev = null;
+    for (let j = 0; j < reps; j++) {
+      chunks.forEach((c, i) => {
+        if (!prev || prev.n !== c.n || prev.sdi !== c.sdi) stsc.push(j * chunks.length + i + 1, c.n, c.sdi);
+        prev = c;
+      });
+    }
+    parts.push(fullBox("stsc", 0, 0, [u32s([stsc.length / 3]), u32s(stsc)]));
+
+    // サンプルごとのバイト数
+    if (t.constSize) parts.push(fullBox("stsz", 0, 0, [u32s([t.constSize, K * reps])]));
+    else {
+      const all = new Uint32Array(K * reps);
+      for (let j = 0; j < reps; j++) all.set(t.sizes.subarray(0, K), j * K);
+      parts.push(fullBox("stsz", 0, 0, [u32s([0, K * reps]), u32s(all)]));
+    }
+
+    // チャンクの位置：何周目も同じ場所（＝同じ中身）を指す
+    const co = new Uint8Array(4 + chunks.length * reps * 8), cdv = view(co);
+    cdv.setUint32(0, chunks.length * reps);
+    for (let j = 0, p = 4; j < reps; j++) for (const c of chunks) { cdv.setBigUint64(p, BigInt(c.off)); p += 8; }
+    parts.push(fullBox("co64", 0, 0, [co]));
+
+    const stbl = box("stbl", parts);
+    const minf = box("minf", [...t.fk.filter((b) => b.type !== "stbl").map((b) => u8Slice(t.u8, b)), stbl]);
+    const mdia = box("mdia", [withDuration(t.u8, t.mdhd, mediaDur, 16, 24), u8Slice(t.u8, t.hdlr), minf]);
+    const elst = fullBox("elst", 0, 0, [u32s([1, movieDur, t.mediaTime, 0x00010000])]);
+    return box("trak", [withDuration(t.u8, t.tkhd, movieDur, 20, 28), box("edts", [elst]), mdia]);
+  }
+  const u8Slice = (u8, b) => u8.slice(b.start, b.end);
+
+  // 本体：file を targetSec 秒ぶん途切れずにくり返す動画（Blob）にする
+  async function make(file, targetSec, withAudio) {
+    const tops = await readTopBoxes(file);
+    if (tops.some((b) => b.type === "moof")) throw new Error("この形式の動画（分割形式のMP4）には対応していません");
+    const moovTop = findBox(tops, "moov");
+    const mdats = tops.filter((b) => b.type === "mdat");
+    if (!moovTop || !mdats.length) throw new Error("MP4/MOV 形式の動画ではないようです");
+    const ftypTop = findBox(tops, "ftyp");
+
+    const u8 = new Uint8Array(await file.slice(moovTop.start, moovTop.start + moovTop.size).arrayBuffer());
+    const moov = parseBoxes(u8, 0, u8.length)[0];
+    const kids = parseBoxes(u8, moov.body, moov.end);
+    const mvhd = findBox(kids, "mvhd");
+    const mvTs = view(u8).getUint32(mvhd.body + (u8[mvhd.body] === 1 ? 20 : 12));
+    const tracks = kids.filter((b) => b.type === "trak").map((b) => readTrack(u8, b)).filter(Boolean);
+    const video = tracks.find((t) => t.kind === "vide");
+    if (!video) throw new Error("映像が見つかりませんでした");
+    const sounds = tracks.filter((t) => t.kind === "soun");
+    const audio = withAudio ? (sounds.find((t) => t.format === "mp4a") || sounds[0]) : null;
+    const use = audio ? [video, audio] : [video];
+
+    let vSum = 0;
+    for (const d of video.durs) vSum += d;
+    const loopSec = vSum / video.timescale;
+    if (!(loopSec > 0)) throw new Error("動画の長さを読み取れませんでした");
+    // 何周ぶん並べるか（長さの欄は32bitなので、あふれない回数までにする）
+    const fit = (ts) => Math.floor(0xFFFFFFF0 / (loopSec * ts));
+    const reps = Math.max(1, Math.min(Math.ceil(targetSec / loopSec), fit(mvTs), ...use.map((t) => fit(t.timescale))));
+    const movieDur = Math.round(reps * loopSec * mvTs);
+
+    const ftyp = ftypTop
+      ? new Uint8Array(await file.slice(ftypTop.start, ftypTop.start + ftypTop.size).arrayBuffer())
+      : box("ftyp", [ascii("qt  "), u32s([0x20050300]), ascii("qt  ")]);
+
+    // 新しいファイルの並び：ftyp → 新しい目次(moov) → 元の中身(mdat)をそのまま
+    const build = (mdatStart) => {
+      const map = [];
+      let p = mdatStart;
+      for (const m of mdats) { map.push({ from: m.start, to: m.start + m.size, shift: p - m.start }); p += m.size; }
+      const offsetOf = (o) => {
+        const m = map.find((x) => o >= x.from && o < x.to);
+        if (!m) throw new Error("動画の中身の位置を読み取れませんでした");
+        return o + m.shift;
+      };
+      const traks = use.map((t) => buildTrak(t, reps, loopSec, movieDur, offsetOf));
+      return box("moov", [withDuration(u8, mvhd, movieDur, 16, 24), ...traks]);
+    };
+    // 目次の大きさは位置の値に関係なく一定なので、一度作って大きさを測ってから本番を作る
+    const newMoov = build(ftyp.length + build(0).length);
+
+    const isQt = str4(ftyp, 8) === "qt  ";
+    const blob = new Blob([ftyp, newMoov, ...mdats.map((m) => file.slice(m.start, m.start + m.size))],
+      { type: isQt ? "video/quicktime" : "video/mp4" });
+    return { blob, reps, loopSec, totalSec: reps * loopSec, hasAudio: !!audio, hadAudio: sounds.length > 0 };
+  }
+
+  return { make };
+})();
+</script>
+
+<script>
+(() => {
+  // ===== 要素の取得 =====
+  const $ = (id) => document.getElementById(id);
+  const fileInput = $("fileInput"), video = $("video"), emptyNote = $("emptyNote"), meta = $("meta");
+  const pickLabel = $("pickLabel"), lenChips = $("lenChips"), soundChips = $("soundChips");
+  const status = $("status"), pipBtn = $("pipBtn"), stopBtn = $("stopBtn");
+
+  // ===== 状態 =====
+  let file = null;          // 選んだ動画
+  let longUrl = null;       // 組み替えた長い動画のURL
+  let lenMin = 60, sound = "on";
+  let prepId = 0;           // 組み替えの途中で設定が変わったときに古い結果を捨てるための番号
+
+  // ===== 設定の保存・読み込み =====
+  const STORE_KEY = "looppip-settings";
+  try {
+    const s = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
+    if (s.lenMin) lenMin = s.lenMin;
+    if (s.sound) sound = s.sound;
+  } catch (e) { /* 保存できない環境では初期値のまま */ }
+  function saveSettings() {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ lenMin, sound })); } catch (e) {}
+  }
+  function syncChips() {
+    lenChips.querySelectorAll(".chip").forEach((c) => c.setAttribute("aria-pressed", String(+c.dataset.min === lenMin)));
+    soundChips.querySelectorAll(".chip").forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.sound === sound)));
+  }
+  lenChips.addEventListener("click", (e) => {
+    const c = e.target.closest(".chip");
+    if (!c) return;
+    lenMin = +c.dataset.min;
+    syncChips(); saveSettings(); prepare();
+  });
+  soundChips.addEventListener("click", (e) => {
+    const c = e.target.closest(".chip");
+    if (!c) return;
+    sound = c.dataset.sound;
+    syncChips(); saveSettings(); prepare();
+  });
+
+  function setStatus(msg, err) {
+    status.textContent = msg;
+    status.classList.toggle("err", !!err);
+  }
+  function formatSec(s) {
+    if (s < 60) return `${Math.round(s * 10) / 10}秒`;
+    const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+    return h ? `${h}時間${m ? m + "分" : ""}` : `${m}分`;
+  }
+
+  // ===== 動画を選ぶ =====
+  fileInput.addEventListener("change", () => {
+    const f = fileInput.files && fileInput.files[0];
+    fileInput.value = ""; // 同じ動画をもう一度選べるようにリセット
+    if (!f) return;
+    file = f;
+    pickLabel.textContent = "＋ ほかの動画に変える";
+    prepare();
+  });
+
+  // 選んだ動画と設定から、長い1本の動画を作ってプレビューにセットする
+  async function prepare() {
+    if (!file) return;
+    const id = ++prepId;
+    const wasPlaying = !video.paused;
+    pipBtn.disabled = true;
+    setStatus("準備しています…");
+    try {
+      const r = await LoopMp4.make(file, lenMin * 60, sound === "on");
+      if (id !== prepId) return;
+      if (longUrl) URL.revokeObjectURL(longUrl);
+      longUrl = URL.createObjectURL(r.blob);
+      video.muted = !r.hasAudio;
+      video.src = longUrl;
+      emptyNote.hidden = true;
+      meta.textContent = `${file.name}・1周 ${formatSec(r.loopSec)} × ${r.reps}回 ＝ ${formatSec(r.totalSec)}つなげました`;
+      setStatus(sound === "on" && !r.hadAudio ? "この動画には音が入っていません。" : "");
+      await new Promise((res) => {
+        video.addEventListener("loadedmetadata", res, { once: true });
+        video.addEventListener("error", res, { once: true });
+      });
+      if (id !== prepId) return;
+      if (video.error) throw new Error("この動画はこのブラウザで再生できませんでした");
+      pipBtn.disabled = false;
+      if (wasPlaying) video.play().catch(() => {});
+    } catch (e) {
+      if (id !== prepId) return;
+      useFallback(e);
+    }
+  }
+
+  // 組み替えられない動画は、元の動画をそのままループ再生にする（つなぎ目でメニューが出ることがある）
+  function useFallback(e) {
+    if (longUrl) URL.revokeObjectURL(longUrl);
+    longUrl = URL.createObjectURL(file);
+    video.muted = sound !== "on";
+    video.src = longUrl;
+    emptyNote.hidden = true;
+    meta.textContent = file.name;
+    setStatus(`${e && e.message ? e.message : e}。ふつうのループ再生にします（つなぎ目でメニューが出ることがあります）。`, true);
+    pipBtn.disabled = false;
+  }
+
+  // ===== ピクチャ・イン・ピクチャ =====
+  // ボタンを押した直後（同じ操作の中）で呼ばないと、iPhoneは許可してくれない
+  pipBtn.addEventListener("click", () => {
+    const playing = video.play();
+    try {
+      if (document.pictureInPictureElement === video) return;
+      if (video.requestPictureInPicture) {
+        video.requestPictureInPicture().catch((e) => setStatus("PiPにできませんでした（" + e.message + "）", true));
+      } else if (video.webkitSupportsPresentationMode && video.webkitSupportsPresentationMode("picture-in-picture")) {
+        video.webkitSetPresentationMode("picture-in-picture"); // 古いiPhone向け
+      } else {
+        setStatus("このブラウザはピクチャ・イン・ピクチャに対応していません。", true);
+      }
+    } catch (e) {
+      setStatus("PiPにできませんでした（" + e.message + "）", true);
+    }
+    playing && playing.catch(() => {});
+  });
+
+  stopBtn.addEventListener("click", () => {
+    video.pause();
+    try {
+      if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
+      else if (video.webkitPresentationMode === "picture-in-picture") video.webkitSetPresentationMode("inline");
+    } catch (e) {}
+  });
+
+  // 再生中かどうかでボタンの表示を変える
+  function syncButtons() { stopBtn.hidden = video.paused; }
+  video.addEventListener("play", syncButtons);
+  video.addEventListener("pause", syncButtons);
+  // プレビューをタップしたら再生・一時停止
+  video.addEventListener("click", () => { if (video.src) video.paused ? video.play().catch(() => {}) : video.pause(); });
+
+  // ===== 起動 =====
+  syncChips();
+})();
+</script>

@@ -6,17 +6,18 @@ $root = $PSScriptRoot
 $app  = Join-Path $root "docs"
 New-Item -ItemType Directory -Force $app | Out-Null
 
-# ---- 1. index.html（本体の前に、全画面起動用の head を足す） ----
-$head = @'
+# ---- 1. 各ページ（本体の前に、全画面起動用の head を足す） ----
+function Build-Page([string]$src, [string]$out, [string]$title, [string]$extraHead) {
+  $head = @"
 <!doctype html>
 <html lang="ja">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="フォトリール">
+<meta name="apple-mobile-web-app-title" content="$title">
 <meta name="theme-color" content="#15131a">
-<link rel="manifest" href="manifest.webmanifest">
+$extraHead
 <link rel="apple-touch-icon" href="icon-180.png">
 <style>
   /* claude.ai が自動で足してくれていた基本スタイルの代わり */
@@ -26,10 +27,13 @@ $head = @'
   /* ステータスバー（時計や電池の表示）に文字が隠れないよう上に余白 */
   .wrap { padding-top: calc(28px + env(safe-area-inset-top, 0px)) !important; }
 </style>
-'@
-$body = Get-Content (Join-Path $root "slideshow.html") -Raw -Encoding UTF8
-$html = $head + $body + "`n</html>`n"
-[IO.File]::WriteAllText((Join-Path $app "index.html"), $html, [Text.UTF8Encoding]::new($false))
+"@
+  $body = Get-Content (Join-Path $root $src) -Raw -Encoding UTF8
+  $html = $head + $body + "`n</html>`n"
+  [IO.File]::WriteAllText((Join-Path $app $out), $html, [Text.UTF8Encoding]::new($false))
+}
+Build-Page "slideshow.html" "index.html" "フォトリール" '<link rel="manifest" href="manifest.webmanifest">'
+Build-Page "loop.html"      "loop.html"  "ループPiP"   ''   # 動画をPiPでくり返し再生するページ
 
 # ---- 2. manifest（「アプリとして起動するときは全画面で」という設定ファイル） ----
 $manifest = @'
