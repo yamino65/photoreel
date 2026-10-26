@@ -105,6 +105,21 @@
   .preview .empty { position: absolute; color: var(--muted); font-size: 14px; }
   .meta { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; margin: 0; word-break: break-all; }
 
+  /* 選んだ動画の一覧（この順に再生する） */
+  .clips { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .clip {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 6px 8px;
+  }
+  .clip video { width: 56px; height: 56px; border-radius: 8px; object-fit: cover; background: #000; flex: none; pointer-events: none; }
+  .clip .num { font-weight: 700; font-variant-numeric: tabular-nums; width: 1.6em; text-align: center; color: var(--accent); flex: none; }
+  .clip .info { flex: 1; min-width: 0; font-size: 13px; }
+  .clip .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .clip .dur { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .clip button { width: 36px; height: 36px; padding: 0; border-radius: 50%; flex: none; }
+  .clip button:disabled { opacity: .3; }
+  .clear-btn { align-self: flex-start; background: transparent; color: var(--muted); }
+
   /* 設定 */
   .chips { display: flex; flex-wrap: wrap; gap: 8px; }
   .chip { min-width: 64px; padding: 8px 12px; border-radius: 999px; }
@@ -136,16 +151,22 @@
 <main class="wrap">
   <header>
     <h1><span class="mark" aria-hidden="true"></span>ループPiP</h1>
-    <p>iPhoneの動画を選んで、ピクチャ・イン・ピクチャで同じ動画をくり返し再生します。1周ごとに再生ボタンなどのメニューが出ません。</p>
+    <p>iPhoneの動画を選んで、ピクチャ・イン・ピクチャでくり返し再生します。何本か選ぶと 1→2→3→1→2→3… の順にくり返します。1周ごとに再生ボタンなどのメニューが出ません。</p>
     <a href="./">← フォトリール（写真のスライドショー）へ</a>
   </header>
 
   <section aria-labelledby="h-video">
-    <h2 id="h-video">1. 動画を選ぶ</h2>
+    <div class="label-row">
+      <h2 id="h-video">1. 動画を選ぶ</h2>
+      <span class="hint" id="clipCount"></span>
+    </div>
     <label class="btn primary-pick">
       <span id="pickLabel">＋ 写真ライブラリから動画を選ぶ</span>
-      <input id="fileInput" type="file" accept="video/*">
+      <input id="fileInput" type="file" accept="video/*" multiple>
     </label>
+    <p class="hint">何本でも選べます。選んだ順に再生します（↑で順番を入れ替え）。</p>
+    <ol class="clips" id="clipList" aria-label="再生する順番"></ol>
+    <button class="clear-btn" id="clearBtn" type="button" hidden>すべて外す</button>
     <div class="preview">
       <video id="video" playsinline muted loop autopictureinpicture></video>
       <span class="empty" id="emptyNote">まだ動画が選ばれていません</span>
@@ -186,7 +207,7 @@
 // MP4/MOV ファイルは「箱（ボックス）」の入れ子でできている。
 //   moov = 目次（何コマ目がファイルのどこにあり、何秒表示するか）
 //   mdat = 中身（映像・音声のデータそのもの）
-// 目次だけを「同じコマを何百回も並べた目次」に書き換え、中身は元のファイルをそのまま指す。
+// 目次だけを「1→2→3→1→2→3…と何百回も並べた目次」に書き換え、中身は元のファイルをそのまま指す。
 // → 再エンコード不要で一瞬。ファイルもほぼ元の大きさのまま、再生上は何時間もの1本の動画になる。
 //   巻き戻し（シーク）が起きないので、PiP でつなぎ目ごとにメニューが出ない。
 const LoopMp4 = (() => {
@@ -209,6 +230,7 @@ const LoopMp4 = (() => {
     return out;
   }
   const findBox = (list, type) => list.find((b) => b.type === type);
+  const u8Slice = (u8, b) => u8.slice(b.start, b.end);
 
   // ファイル全体の一番外側の箱を、頭の部分だけ読んで並べる（大きな動画を丸ごと読まない）
   async function readTopBoxes(file) {
@@ -264,9 +286,8 @@ const LoopMp4 = (() => {
     for (; k < count; k++) durs[k] = k ? durs[k - 1] : 1;
 
     // 表示順のずれ（Bフレームがある動画で使う）
-    let cto = null, cttsVer = 0;
+    let cto = null;
     if (ctts) {
-      cttsVer = u8[ctts.body];
       cto = new Int32Array(count);
       b = ctts.body; k = 0;
       for (let i = 0, n = dv.getUint32(b + 4); i < n; i++) {
@@ -310,7 +331,45 @@ const LoopMp4 = (() => {
       }
     }
 
-    return { kind, format, timescale, u8, tkhd, mdhd, hdlr, fk, stsd, count, constSize, sizes, durs, cto, cttsVer, sync, chunks, mediaTime };
+    return { kind, format, timescale, u8, tkhd, mdhd, hdlr, fk, stsd, count, constSize, sizes, durs, cto, sync, chunks, mediaTime };
+  }
+
+  // 1本の動画ファイルの目次を読む
+  async function readClip(file) {
+    const tops = await readTopBoxes(file);
+    if (tops.some((b) => b.type === "moof")) throw new Error(`「${file.name}」は対応していない形式（分割形式のMP4）です`);
+    const moovTop = findBox(tops, "moov");
+    const mdats = tops.filter((b) => b.type === "mdat");
+    if (!moovTop || !mdats.length) throw new Error(`「${file.name}」は MP4/MOV 形式の動画ではないようです`);
+    const ftypTop = findBox(tops, "ftyp");
+    const ftyp = ftypTop ? new Uint8Array(await file.slice(ftypTop.start, ftypTop.start + ftypTop.size).arrayBuffer()) : null;
+
+    const u8 = new Uint8Array(await file.slice(moovTop.start, moovTop.start + moovTop.size).arrayBuffer());
+    const moov = parseBoxes(u8, 0, u8.length)[0];
+    const kids = parseBoxes(u8, moov.body, moov.end);
+    const mvhd = findBox(kids, "mvhd");
+    const mvTs = view(u8).getUint32(mvhd.body + (u8[mvhd.body] === 1 ? 20 : 12));
+    const tracks = kids.filter((b) => b.type === "trak").map((b) => readTrack(u8, b)).filter(Boolean);
+    const video = tracks.find((t) => t.kind === "vide");
+    if (!video) throw new Error(`「${file.name}」に映像が見つかりませんでした`);
+    const sounds = tracks.filter((t) => t.kind === "soun");
+    const audio = sounds.find((t) => t.format === "mp4a") || sounds[0] || null;
+
+    let vSum = 0;
+    for (const d of video.durs) vSum += d;
+    const lenSec = vSum / video.timescale;
+    if (!(lenSec > 0)) throw new Error(`「${file.name}」の長さを読み取れませんでした`);
+    return { file, mdats, ftyp, u8, mvhd, mvTs, video, audio, lenSec };
+  }
+
+  // 映像の向き（回転の行列）と縦横比
+  function shapeOf(t) {
+    const u8 = t.u8, b = t.tkhd.body, dv = view(u8);
+    const m = b + (u8[b] === 1 ? 52 : 40);
+    return {
+      rot: [0, 4, 12, 16].map((o) => dv.getInt32(m + o)).join(","), // 行列のうち回転・反転を表す部分
+      aspect: dv.getUint32(m + 36) / Math.max(1, dv.getUint32(m + 40)),
+    };
   }
 
   // ---- 箱を作る道具 ----
@@ -338,153 +397,188 @@ const LoopMp4 = (() => {
     else dv.setUint32(o + v0At, dur);
     return out;
   }
-
-  // 同じ値が続く所をまとめる（[回数, 値] の並びにする）
-  function runs(arr, from, to) {
-    const out = [];
-    for (let i = from; i < to; i++) {
-      const r = out[out.length - 1];
-      if (r && r[1] === arr[i]) r[0]++; else out.push([1, arr[i]]);
-    }
-    return out;
+  // 同じバイト列かどうかを見分けるための文字列
+  function keyOf(u8) {
+    let s = "";
+    for (let i = 0; i < u8.length; i += 8192) s += String.fromCharCode.apply(null, u8.subarray(i, i + 8192));
+    return s;
   }
 
-  // 1本の線路を reps 回くり返した目次（trak 箱）を作る
-  function buildTrak(t, reps, loopSec, movieDur, offsetOf) {
-    const target = loopSec * t.timescale; // 1周の長さ（この線路の目盛り）
+  // 複数の動画の同じ種類の線路（映像どうし／音声どうし）を順につなぎ、reps 周くり返した trak 箱を作る
+  // parts: [{ t: 線路, clipSec: その動画の長さ, startSec: 1周の中での開始秒, offsetOf: 中身の位置の変換 }]
+  function buildTrak(parts, o) {
+    const first = parts[0].t, T = first.timescale, m1 = first.mediaTime;
 
-    // 1周で使うサンプル数 K：映像の長さに収まるところまで（音声が少し長い場合は切りそろえる）
-    let K = 0, acc = 0;
-    while (K < t.count && acc < target - 0.5) acc += t.durs[K++];
-    K = Math.max(1, K);
-    const chunks = [];
-    let left = K;
-    for (const c of t.chunks) {
-      if (left <= 0) break;
-      const n = Math.min(c.n, left);
-      chunks.push({ off: offsetOf(c.off), n, sdi: c.sdi });
-      left -= n;
+    // 形式の説明（stsd）を集める。まったく同じものは1つにまとめる
+    const entries = [], keys = new Map();
+    // 1周ぶんのサンプルの情報
+    const sizes = [], sync = [], cto = [], startSec = [], chunks = [];
+    let constSize = first.constSize, hasSync = false;
+    for (const p of parts) {
+      const t = p.t;
+      const sdiMap = parseBoxes(t.u8, t.stsd.body + 8, t.stsd.end).map((b) => {
+        const e = u8Slice(t.u8, b), k = keyOf(e);
+        if (!keys.has(k)) { entries.push(e); keys.set(k, entries.length); }
+        return keys.get(k);
+      });
+      // この動画の映像の長さに収まるサンプルだけ使う（音声が少し長い場合は切りそろえる）
+      const target = p.clipSec * t.timescale;
+      let K = 0, acc = 0;
+      while (K < t.count && acc < target - 0.5) acc += t.durs[K++];
+      K = Math.max(1, K);
+      let left = K;
+      for (const c of t.chunks) {
+        if (left <= 0) break;
+        const n = Math.min(c.n, left);
+        chunks.push({ off: p.offsetOf(c.off), n, sdi: sdiMap[c.sdi - 1] || 1 });
+        left -= n;
+      }
+      K -= left; // 目次が壊れていてチャンクが足りない場合
+      if (t.sync) hasSync = true;
+      if (t.constSize !== constSize) constSize = 0;
+      let s = 0;
+      for (let i = 0; i < K; i++) {
+        sizes.push(t.sizes ? t.sizes[i] : t.constSize);
+        sync.push(t.sync ? t.sync[i] : 1);
+        // 表示順のずれを、1本目の動画の基準にそろえる（動画ごとに頭出しの量がちがっても、つなぎ目がずれない）
+        if (o.isVideo) cto.push(Math.round(((t.cto ? t.cto[i] : 0) - t.mediaTime) / t.timescale * T) + m1);
+        startSec.push(p.startSec + s / t.timescale);
+        s += t.durs[i];
+      }
     }
-    K -= left; // 目次が壊れていてチャンクが足りない場合
-    let lastStart = 0;
-    for (let i = 0; i < K - 1; i++) lastStart += t.durs[i];
+    const K = sizes.length, N = K * o.reps;
 
-    // 表示時間：1周の最後のサンプルの長さを調整して、映像と音声がずれていかないようにする
-    const base = runs(t.durs, 0, K - 1);
+    // 表示時間：各サンプルの開始時刻を「全体の何秒目か」から計算し、差を取る
+    // （動画ごとに目盛りの細かさがちがっても、何周しても映像と音声がずれない）
     const stts = [];
-    let mediaDur = 0;
-    for (let j = 0; j < reps; j++) {
-      const end = Math.round((j + 1) * target);
-      const last = Math.max(1, end - mediaDur - lastStart);
-      for (const r of base) stts.push(r[0], r[1]);
-      stts.push(1, last);
-      mediaDur += lastStart + last;
+    let cur = 0, runLen = 0, runVal = -1;
+    for (let idx = 0; idx < N; idx++) {
+      const nx = idx + 1;
+      const next = nx < N ? Math.round((Math.floor(nx / K) * o.cycleSec + startSec[nx % K]) * T) : Math.round(o.reps * o.cycleSec * T);
+      const d = Math.max(1, next - cur);
+      if (d === runVal) runLen++;
+      else { if (runLen) stts.push(runLen, runVal); runVal = d; runLen = 1; }
+      cur += d;
     }
+    stts.push(runLen, runVal);
+    const mediaDur = cur;
 
-    const parts = [u8Slice(t.u8, t.stsd), fullBox("stts", 0, 0, [u32s([stts.length / 2]), u32s(stts)])];
+    const parts2 = [
+      fullBox("stsd", 0, 0, [u32s([entries.length]), ...entries]),
+      fullBox("stts", 0, 0, [u32s([stts.length / 2]), u32s(stts)]),
+    ];
 
-    if (t.cto) {
-      const cr = runs(t.cto, 0, K), flat = [];
-      for (const r of cr) flat.push(r[0], r[1]);
-      const all = new Uint32Array(flat.length * reps);
-      for (let j = 0; j < reps; j++) all.set(flat.map((v) => v >>> 0), j * flat.length);
-      parts.push(fullBox("ctts", t.cttsVer, 0, [u32s([cr.length * reps]), u32s(all)]));
+    if (cto.some((v) => v !== 0)) {
+      const flat = [];
+      for (let i = 0; i < K; i++) {
+        if (flat.length && flat[flat.length - 1] === cto[i]) flat[flat.length - 2]++;
+        else flat.push(1, cto[i]);
+      }
+      const all = new Uint32Array(flat.length * o.reps);
+      const base = flat.map((v) => v >>> 0);
+      for (let j = 0; j < o.reps; j++) all.set(base, j * flat.length);
+      parts2.push(fullBox("ctts", cto.some((v) => v < 0) ? 1 : 0, 0, [u32s([all.length / 2]), u32s(all)]));
     }
-    if (t.sync) {
-      const keys = [];
-      for (let i = 0; i < K; i++) if (t.sync[i]) keys.push(i + 1);
-      const all = new Uint32Array(keys.length * reps);
-      for (let j = 0; j < reps; j++) for (let i = 0; i < keys.length; i++) all[j * keys.length + i] = keys[i] + j * K;
-      parts.push(fullBox("stss", 0, 0, [u32s([all.length]), u32s(all)]));
+    if (hasSync) {
+      const keysIdx = [];
+      for (let i = 0; i < K; i++) if (sync[i]) keysIdx.push(i + 1);
+      const all = new Uint32Array(keysIdx.length * o.reps);
+      for (let j = 0; j < o.reps; j++) for (let i = 0; i < keysIdx.length; i++) all[j * keysIdx.length + i] = keysIdx[i] + j * K;
+      parts2.push(fullBox("stss", 0, 0, [u32s([all.length]), u32s(all)]));
     }
 
     // チャンクごとのサンプル数（同じ並びが続く所はまとめる）
     const stsc = [];
     let prev = null;
-    for (let j = 0; j < reps; j++) {
+    for (let j = 0; j < o.reps; j++) {
       chunks.forEach((c, i) => {
         if (!prev || prev.n !== c.n || prev.sdi !== c.sdi) stsc.push(j * chunks.length + i + 1, c.n, c.sdi);
         prev = c;
       });
     }
-    parts.push(fullBox("stsc", 0, 0, [u32s([stsc.length / 3]), u32s(stsc)]));
+    parts2.push(fullBox("stsc", 0, 0, [u32s([stsc.length / 3]), u32s(stsc)]));
 
     // サンプルごとのバイト数
-    if (t.constSize) parts.push(fullBox("stsz", 0, 0, [u32s([t.constSize, K * reps])]));
+    if (constSize) parts2.push(fullBox("stsz", 0, 0, [u32s([constSize, N])]));
     else {
-      const all = new Uint32Array(K * reps);
-      for (let j = 0; j < reps; j++) all.set(t.sizes.subarray(0, K), j * K);
-      parts.push(fullBox("stsz", 0, 0, [u32s([0, K * reps]), u32s(all)]));
+      const all = new Uint32Array(N), base = Uint32Array.from(sizes);
+      for (let j = 0; j < o.reps; j++) all.set(base, j * K);
+      parts2.push(fullBox("stsz", 0, 0, [u32s([0, N]), u32s(all)]));
     }
 
     // チャンクの位置：何周目も同じ場所（＝同じ中身）を指す
-    const co = new Uint8Array(4 + chunks.length * reps * 8), cdv = view(co);
-    cdv.setUint32(0, chunks.length * reps);
-    for (let j = 0, p = 4; j < reps; j++) for (const c of chunks) { cdv.setBigUint64(p, BigInt(c.off)); p += 8; }
-    parts.push(fullBox("co64", 0, 0, [co]));
+    const co = new Uint8Array(4 + chunks.length * o.reps * 8), cdv = view(co);
+    cdv.setUint32(0, chunks.length * o.reps);
+    for (let j = 0, p = 4; j < o.reps; j++) for (const c of chunks) { cdv.setBigUint64(p, BigInt(c.off)); p += 8; }
+    parts2.push(fullBox("co64", 0, 0, [co]));
 
-    const stbl = box("stbl", parts);
-    const minf = box("minf", [...t.fk.filter((b) => b.type !== "stbl").map((b) => u8Slice(t.u8, b)), stbl]);
-    const mdia = box("mdia", [withDuration(t.u8, t.mdhd, mediaDur, 16, 24), u8Slice(t.u8, t.hdlr), minf]);
-    const elst = fullBox("elst", 0, 0, [u32s([1, movieDur, t.mediaTime, 0x00010000])]);
-    return box("trak", [withDuration(t.u8, t.tkhd, movieDur, 20, 28), box("edts", [elst]), mdia]);
+    const stbl = box("stbl", parts2);
+    const minf = box("minf", [...first.fk.filter((b) => b.type !== "stbl").map((b) => u8Slice(first.u8, b)), stbl]);
+    const mdia = box("mdia", [withDuration(first.u8, first.mdhd, mediaDur, 16, 24), u8Slice(first.u8, first.hdlr), minf]);
+    const elst = fullBox("elst", 0, 0, [u32s([1, o.movieDur, m1, 0x00010000])]);
+    return box("trak", [withDuration(first.u8, first.tkhd, o.movieDur, 20, 28), box("edts", [elst]), mdia]);
   }
-  const u8Slice = (u8, b) => u8.slice(b.start, b.end);
 
-  // 本体：file を targetSec 秒ぶん途切れずにくり返す動画（Blob）にする
-  async function make(file, targetSec, withAudio) {
-    const tops = await readTopBoxes(file);
-    if (tops.some((b) => b.type === "moof")) throw new Error("この形式の動画（分割形式のMP4）には対応していません");
-    const moovTop = findBox(tops, "moov");
-    const mdats = tops.filter((b) => b.type === "mdat");
-    if (!moovTop || !mdats.length) throw new Error("MP4/MOV 形式の動画ではないようです");
-    const ftypTop = findBox(tops, "ftyp");
+  // 本体：files を順につないだものを、targetSec 秒ぶん途切れずにくり返す動画（Blob）にする
+  async function make(files, targetSec, withAudio) {
+    const clips = [];
+    for (const f of files) clips.push(await readClip(f));
 
-    const u8 = new Uint8Array(await file.slice(moovTop.start, moovTop.start + moovTop.size).arrayBuffer());
-    const moov = parseBoxes(u8, 0, u8.length)[0];
-    const kids = parseBoxes(u8, moov.body, moov.end);
-    const mvhd = findBox(kids, "mvhd");
-    const mvTs = view(u8).getUint32(mvhd.body + (u8[mvhd.body] === 1 ? 20 : 12));
-    const tracks = kids.filter((b) => b.type === "trak").map((b) => readTrack(u8, b)).filter(Boolean);
-    const video = tracks.find((t) => t.kind === "vide");
-    if (!video) throw new Error("映像が見つかりませんでした");
-    const sounds = tracks.filter((t) => t.kind === "soun");
-    const audio = withAudio ? (sounds.find((t) => t.format === "mp4a") || sounds[0]) : null;
-    const use = audio ? [video, audio] : [video];
+    // 1本の線路にまとめられるのは、映像の形式・向き・縦横比がそろっているときだけ
+    const s0 = shapeOf(clips[0].video);
+    for (const c of clips) {
+      const s = shapeOf(c.video);
+      if (c.video.format !== clips[0].video.format || s.rot !== s0.rot || Math.abs(s.aspect / s0.aspect - 1) > 0.01) {
+        const e = new Error("向き・縦横比・形式のちがう動画が混ざっているため、1本にまとめられませんでした");
+        e.mixed = true;
+        throw e;
+      }
+    }
+    const useAudio = withAudio && clips.every((c) => c.audio);
 
-    let vSum = 0;
-    for (const d of video.durs) vSum += d;
-    const loopSec = vSum / video.timescale;
-    if (!(loopSec > 0)) throw new Error("動画の長さを読み取れませんでした");
+    // 1周の長さと、その中で各動画が始まる位置
+    const starts = [];
+    let cycleSec = 0;
+    for (const c of clips) { starts.push(cycleSec); cycleSec += c.lenSec; }
+    const first = clips[0], mvTs = first.mvTs;
     // 何周ぶん並べるか（長さの欄は32bitなので、あふれない回数までにする）
-    const fit = (ts) => Math.floor(0xFFFFFFF0 / (loopSec * ts));
-    const reps = Math.max(1, Math.min(Math.ceil(targetSec / loopSec), fit(mvTs), ...use.map((t) => fit(t.timescale))));
-    const movieDur = Math.round(reps * loopSec * mvTs);
+    const fit = (ts) => Math.floor(0xFFFFFFF0 / (cycleSec * ts));
+    const tss = [mvTs, first.video.timescale, ...(useAudio ? [first.audio.timescale] : [])];
+    const reps = Math.max(1, Math.min(Math.ceil(targetSec / cycleSec), ...tss.map(fit)));
+    const movieDur = Math.round(reps * cycleSec * mvTs);
 
-    const ftyp = ftypTop
-      ? new Uint8Array(await file.slice(ftypTop.start, ftypTop.start + ftypTop.size).arrayBuffer())
-      : box("ftyp", [ascii("qt  "), u32s([0x20050300]), ascii("qt  ")]);
+    const ftyp = first.ftyp || box("ftyp", [ascii("qt  "), u32s([0x20050300]), ascii("qt  ")]);
 
-    // 新しいファイルの並び：ftyp → 新しい目次(moov) → 元の中身(mdat)をそのまま
+    // 新しいファイルの並び：ftyp → 新しい目次(moov) → 各動画の中身(mdat)をそのまま
     const build = (mdatStart) => {
-      const map = [];
       let p = mdatStart;
-      for (const m of mdats) { map.push({ from: m.start, to: m.start + m.size, shift: p - m.start }); p += m.size; }
-      const offsetOf = (o) => {
-        const m = map.find((x) => o >= x.from && o < x.to);
-        if (!m) throw new Error("動画の中身の位置を読み取れませんでした");
-        return o + m.shift;
-      };
-      const traks = use.map((t) => buildTrak(t, reps, loopSec, movieDur, offsetOf));
-      return box("moov", [withDuration(u8, mvhd, movieDur, 16, 24), ...traks]);
+      const offsetOfs = clips.map((c) => {
+        const map = c.mdats.map((m) => { const r = { from: m.start, to: m.start + m.size, shift: p - m.start }; p += m.size; return r; });
+        return (off) => {
+          const m = map.find((x) => off >= x.from && off < x.to);
+          if (!m) throw new Error(`「${c.file.name}」の中身の位置を読み取れませんでした`);
+          return off + m.shift;
+        };
+      });
+      const partsOf = (kind) => clips.map((c, i) => ({ t: c[kind], clipSec: c.lenSec, startSec: starts[i], offsetOf: offsetOfs[i] }));
+      const opt = { reps, cycleSec, movieDur };
+      const traks = [buildTrak(partsOf("video"), { ...opt, isVideo: true })];
+      if (useAudio) traks.push(buildTrak(partsOf("audio"), opt));
+      return box("moov", [withDuration(first.u8, first.mvhd, movieDur, 16, 24), ...traks]);
     };
     // 目次の大きさは位置の値に関係なく一定なので、一度作って大きさを測ってから本番を作る
     const newMoov = build(ftyp.length + build(0).length);
 
     const isQt = str4(ftyp, 8) === "qt  ";
-    const blob = new Blob([ftyp, newMoov, ...mdats.map((m) => file.slice(m.start, m.start + m.size))],
+    const blob = new Blob(
+      [ftyp, newMoov, ...clips.flatMap((c) => c.mdats.map((m) => c.file.slice(m.start, m.start + m.size)))],
       { type: isQt ? "video/quicktime" : "video/mp4" });
-    return { blob, reps, loopSec, totalSec: reps * loopSec, hasAudio: !!audio, hadAudio: sounds.length > 0 };
+    return {
+      blob, reps, cycleSec, totalSec: reps * cycleSec,
+      hasAudio: useAudio,
+      noAudioAny: clips.every((c) => !c.audio),          // どの動画にも音が無い
+      audioDropped: withAudio && !useAudio && clips.some((c) => c.audio), // 音のない動画が混ざっていて音を外した
+    };
   }
 
   return { make };
@@ -496,12 +590,16 @@ const LoopMp4 = (() => {
   // ===== 要素の取得 =====
   const $ = (id) => document.getElementById(id);
   const fileInput = $("fileInput"), video = $("video"), emptyNote = $("emptyNote"), meta = $("meta");
-  const pickLabel = $("pickLabel"), lenChips = $("lenChips"), soundChips = $("soundChips");
+  const pickLabel = $("pickLabel"), clipList = $("clipList"), clipCount = $("clipCount"), clearBtn = $("clearBtn");
+  const lenChips = $("lenChips"), soundChips = $("soundChips");
   const status = $("status"), pipBtn = $("pipBtn"), stopBtn = $("stopBtn");
 
   // ===== 状態 =====
-  let file = null;          // 選んだ動画
+  // clips: { file, url: 元の動画のURL, li: 一覧の行 } を再生する順に並べたもの
+  let clips = [];
   let longUrl = null;       // 組み替えた長い動画のURL
+  let playlist = null;      // 1本にまとめられなかったときの、切り替え再生用のURL一覧
+  let plPos = 0;
   let lenMin = 60, sound = "on";
   let prepId = 0;           // 組み替えの途中で設定が変わったときに古い結果を捨てるための番号
 
@@ -544,56 +642,132 @@ const LoopMp4 = (() => {
 
   // ===== 動画を選ぶ =====
   fileInput.addEventListener("change", () => {
-    const f = fileInput.files && fileInput.files[0];
+    const files = Array.from(fileInput.files || []).filter((f) => f.type.startsWith("video/") || /\.(mov|mp4|m4v)$/i.test(f.name));
     fileInput.value = ""; // 同じ動画をもう一度選べるようにリセット
-    if (!f) return;
-    file = f;
-    pickLabel.textContent = "＋ ほかの動画に変える";
+    if (!files.length) return;
+    files.forEach((f) => clips.push(makeClip(f)));
+    renderList();
     prepare();
   });
 
+  // 一覧の1行（小さなプレビュー・番号・名前・長さ・↑・×）を作る
+  function makeClip(file) {
+    const c = { file, url: URL.createObjectURL(file), li: document.createElement("li") };
+    c.li.className = "clip";
+    const num = document.createElement("span");
+    num.className = "num";
+    const thumb = document.createElement("video");
+    thumb.muted = true; thumb.playsInline = true; thumb.preload = "metadata";
+    thumb.src = c.url + "#t=0.1"; // 0.1秒目の絵をサムネイルにする
+    const info = document.createElement("div");
+    info.className = "info";
+    const name = document.createElement("div");
+    name.className = "name"; name.textContent = file.name;
+    const dur = document.createElement("div");
+    dur.className = "dur";
+    thumb.addEventListener("loadedmetadata", () => { dur.textContent = formatSec(thumb.duration); });
+    info.append(name, dur);
+    const up = document.createElement("button");
+    up.type = "button"; up.textContent = "↑"; up.className = "up";
+    up.addEventListener("click", () => {
+      const i = clips.indexOf(c);
+      if (i > 0) { [clips[i - 1], clips[i]] = [clips[i], clips[i - 1]]; renderList(); prepare(); }
+    });
+    const rm = document.createElement("button");
+    rm.type = "button"; rm.textContent = "×";
+    rm.addEventListener("click", () => {
+      clips = clips.filter((x) => x !== c);
+      URL.revokeObjectURL(c.url);
+      renderList(); prepare();
+    });
+    c.li.append(num, thumb, info, up, rm);
+    return c;
+  }
+
+  function renderList() {
+    clips.forEach((c, i) => {
+      c.li.querySelector(".num").textContent = i + 1;
+      const up = c.li.querySelector(".up");
+      up.disabled = i === 0;
+      up.setAttribute("aria-label", `${i + 1}番目を1つ上へ`);
+      c.li.lastChild.setAttribute("aria-label", `${i + 1}番目を外す`);
+      clipList.appendChild(c.li); // 今の順番に並べ直す（appendChild は移動になる）
+    });
+    clipCount.textContent = clips.length ? `${clips.length}本` : "";
+    clearBtn.hidden = clips.length === 0;
+    pickLabel.textContent = clips.length ? "＋ 動画を追加する" : "＋ 写真ライブラリから動画を選ぶ";
+  }
+  clearBtn.addEventListener("click", () => {
+    clips.forEach((c) => { URL.revokeObjectURL(c.url); c.li.remove(); });
+    clips = [];
+    renderList(); prepare();
+  });
+
+  // 再生中の動画を差し替える
+  function setSource(url, muted, loop) {
+    if (longUrl && longUrl !== url) { URL.revokeObjectURL(longUrl); longUrl = null; }
+    video.muted = muted;
+    video.loop = loop;
+    video.src = url;
+    emptyNote.hidden = true;
+  }
+
   // 選んだ動画と設定から、長い1本の動画を作ってプレビューにセットする
   async function prepare() {
-    if (!file) return;
     const id = ++prepId;
     const wasPlaying = !video.paused;
     pipBtn.disabled = true;
+    playlist = null;
+    if (!clips.length) {
+      video.pause();
+      video.removeAttribute("src"); video.load();
+      if (longUrl) { URL.revokeObjectURL(longUrl); longUrl = null; }
+      emptyNote.hidden = false; meta.textContent = ""; setStatus("");
+      return;
+    }
     setStatus("準備しています…");
     try {
-      const r = await LoopMp4.make(file, lenMin * 60, sound === "on");
+      const r = await LoopMp4.make(clips.map((c) => c.file), lenMin * 60, sound === "on");
       if (id !== prepId) return;
-      if (longUrl) URL.revokeObjectURL(longUrl);
-      longUrl = URL.createObjectURL(r.blob);
-      video.muted = !r.hasAudio;
-      video.src = longUrl;
-      emptyNote.hidden = true;
-      meta.textContent = `${file.name}・1周 ${formatSec(r.loopSec)} × ${r.reps}回 ＝ ${formatSec(r.totalSec)}つなげました`;
-      setStatus(sound === "on" && !r.hadAudio ? "この動画には音が入っていません。" : "");
+      const url = URL.createObjectURL(r.blob);
+      setSource(url, !r.hasAudio, true); // 選んだ長さを過ぎたら、ふつうのループで最初に戻る
+      longUrl = url;
+      const what = clips.length > 1 ? `${clips.length}本で1周 ${formatSec(r.cycleSec)}` : `1周 ${formatSec(r.cycleSec)}`;
+      meta.textContent = `${what} × ${r.reps}回 ＝ ${formatSec(r.totalSec)}つなげました`;
+      setStatus(sound !== "on" ? ""
+        : r.audioDropped ? "音の入っていない動画が混ざっているため、音なしで再生します。"
+        : r.noAudioAny ? "この動画には音が入っていません。" : "");
       await new Promise((res) => {
         video.addEventListener("loadedmetadata", res, { once: true });
         video.addEventListener("error", res, { once: true });
       });
       if (id !== prepId) return;
-      if (video.error) throw new Error("この動画はこのブラウザで再生できませんでした");
+      if (video.error) throw new Error("つないだ動画をこのブラウザで再生できませんでした");
       pipBtn.disabled = false;
       if (wasPlaying) video.play().catch(() => {});
     } catch (e) {
       if (id !== prepId) return;
-      useFallback(e);
+      usePlaylist(e, wasPlaying);
     }
   }
 
-  // 組み替えられない動画は、元の動画をそのままループ再生にする（つなぎ目でメニューが出ることがある）
-  function useFallback(e) {
-    if (longUrl) URL.revokeObjectURL(longUrl);
-    longUrl = URL.createObjectURL(file);
-    video.muted = sound !== "on";
-    video.src = longUrl;
-    emptyNote.hidden = true;
-    meta.textContent = file.name;
-    setStatus(`${e && e.message ? e.message : e}。ふつうのループ再生にします（つなぎ目でメニューが出ることがあります）。`, true);
+  // 1本にまとめられないときは、元の動画を1本ずつ切り替えて再生する（切り替えのときメニューが出ることがある）
+  function usePlaylist(e, wasPlaying) {
+    playlist = clips.map((c) => c.url);
+    plPos = 0;
+    setSource(playlist[0], sound !== "on", playlist.length === 1);
+    meta.textContent = "";
+    const how = playlist.length > 1 ? "1本ずつ切り替えて" : "ふつうのループで";
+    setStatus(`${e && e.message ? e.message : e}。${how}再生します（つなぎ目でメニューが出ることがあります）。`, true);
     pipBtn.disabled = false;
+    if (wasPlaying) video.play().catch(() => {});
   }
+  video.addEventListener("ended", () => {
+    if (!playlist || playlist.length < 2) return;
+    plPos = (plPos + 1) % playlist.length;
+    video.src = playlist[plPos];
+    video.play().catch(() => {});
+  });
 
   // ===== ピクチャ・イン・ピクチャ =====
   // ボタンを押した直後（同じ操作の中）で呼ばないと、iPhoneは許可してくれない
@@ -631,5 +805,6 @@ const LoopMp4 = (() => {
 
   // ===== 起動 =====
   syncChips();
+  renderList();
 })();
 </script>
