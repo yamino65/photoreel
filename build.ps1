@@ -14,7 +14,6 @@ function Build-Page([string]$src, [string]$out, [string]$title, [string]$extraHe
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="$title">
 <meta name="theme-color" content="#15131a">
 $extraHead
@@ -32,8 +31,10 @@ $extraHead
   $html = $head + $body + "`n</html>`n"
   [IO.File]::WriteAllText((Join-Path $app $out), $html, [Text.UTF8Encoding]::new($false))
 }
-Build-Page "slideshow.html" "index.html" "フォトリール" '<link rel="manifest" href="manifest.webmanifest">'
-Build-Page "loop.html"      "loop.html"  "ループPiP"   ''   # 動画をPiPでくり返し再生するページ
+Build-Page "slideshow.html" "index.html" "フォトリール" "<meta name=`"mobile-web-app-capable`" content=`"yes`">`n<link rel=`"manifest`" href=`"manifest.webmanifest`">"
+# 動画をPiPでくり返し再生するページ。ホーム画面アプリ（Webアプリ）として起動するとiPhoneの不具合でPiPが使えないので、
+# アプリ化の設定は付けない（ホーム画面のアイコンからも Safari で開くように）
+Build-Page "loop.html"      "loop.html"  "ループPiP"   ''
 
 # ---- 2. manifest（「アプリとして起動するときは全画面で」という設定ファイル） ----
 $manifest = @'

@@ -1,7 +1,5 @@
 <title>ループPiP</title>
 <meta name="claude:viewport-fit-sides" content="cover">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&display=swap">
@@ -128,6 +126,17 @@
   .status { font-size: 14px; margin: 0; min-height: 1.6em; }
   .status.err { color: var(--danger); }
 
+  /* ホーム画面アプリとして起動したときの案内 */
+  .standalone-note {
+    display: flex; flex-direction: column; gap: 10px;
+    border: 1px solid var(--accent); border-radius: 12px; padding: 12px 14px;
+  }
+  .standalone-note p { margin: 0; }
+  .standalone-note .btn {
+    align-self: flex-start; text-decoration: none; font-weight: 700;
+    background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
+  }
+
   /* 下に固定のボタン */
   .start-bar {
     position: fixed; left: 0; right: 0; bottom: 0;
@@ -154,6 +163,12 @@
     <p>iPhoneの動画を選んで、ピクチャ・イン・ピクチャでくり返し再生します。何本か選ぶと 1→2→3→1→2→3… の順にくり返します。1周ごとに再生ボタンなどのメニューが出ません。</p>
     <a href="./">← フォトリール（写真のスライドショー）へ</a>
   </header>
+
+  <div class="standalone-note" id="standaloneNote" hidden>
+    <p>ホーム画面から開いたアプリでは、iPhoneの不具合でピクチャ・イン・ピクチャが使えません。Safariで開き直してください。</p>
+    <a class="btn" id="openSafari" href="./loop.html">Safariで開く</a>
+    <p class="hint">毎回この画面になる場合は、ホーム画面のアイコンを削除し、Safariでこのページを開いて共有ボタン →「ホーム画面に追加」で、「Webアプリとして開く」をオフにして追加し直してください。</p>
+  </div>
 
   <section aria-labelledby="h-video">
     <div class="label-row">
@@ -202,8 +217,6 @@
   <button id="stopBtn" class="stop-btn" type="button" hidden>止める</button>
 </div>
 
-<!-- MP4動画ファイルを組み立てるライブラリ（向きのちがう動画の映像を作り直すときに使う） -->
-<script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/build/mp4-muxer.min.js"></script>
 <script>
 // ===== 動画ファイルの「目次」を組み替えて、長い1本の動画にする =====
 // MP4/MOV ファイルは「箱（ボックス）」の入れ子でできている。
@@ -364,154 +377,15 @@ const LoopMp4 = (() => {
     return { file, mdats, ftyp, u8, mvhd, mvTs, video, audio, lenSec };
   }
 
-  // 映像の向き（回転の行列）と大きさ
+  // 映像の向き（回転の行列）と縦横比
   function shapeOf(t) {
     const u8 = t.u8, b = t.tkhd.body, dv = view(u8);
     const m = b + (u8[b] === 1 ? 52 : 40);
-    const [a, bb, c, d] = [0, 4, 12, 16].map((o) => dv.getInt32(m + o) / 65536); // 行列のうち回転・反転を表す部分
-    const w = dv.getUint32(m + 36) / 65536, h = dv.getUint32(m + 40) / 65536;
-    return { a, b: bb, c, d, w, h, rot: [a, bb, c, d].join(","), aspect: w / Math.max(1, h) };
-  }
-
-  // ===== 向きや形式がちがう動画どうしは、映像だけ作り直して形をそろえる =====
-  // 動画をコマごとの絵に戻し（デコード）、同じ大きさの画用紙(canvas)に描き直して、
-  // H.264 の1本の映像に書き出す（エンコード）。音は元の動画のデータをそのまま使う。
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-  // デコーダーの設定（形式の名前と、形式ごとの細かい設定データ）を stsd から取り出す
-  function decoderConfig(t) {
-    const u8 = t.u8, dv = view(u8), hex = (v) => v.toString(16).padStart(2, "0");
-    const e = parseBoxes(u8, t.stsd.body + 8, t.stsd.end)[0];
-    const kids = parseBoxes(u8, e.body + 78, e.end); // 78バイトの固定部分のあとに設定の箱が続く
-    const base = { codedWidth: dv.getUint16(e.body + 24), codedHeight: dv.getUint16(e.body + 26) };
-    const avcC = findBox(kids, "avcC"), hvcC = findBox(kids, "hvcC");
-    if (avcC) {
-      const b = avcC.body;
-      return { ...base, codec: `${e.type}.${hex(u8[b + 1])}${hex(u8[b + 2])}${hex(u8[b + 3])}`, description: u8.slice(b, avcC.end) };
-    }
-    if (hvcC) {
-      // HEVC の形式名は「hvc1.プロファイル.互換フラグ.ティアとレベル.制約フラグ」の決まった書き方
-      const b = hvcC.body;
-      const space = u8[b + 1] >> 6, tier = (u8[b + 1] >> 5) & 1, prof = u8[b + 1] & 31;
-      let compat = dv.getUint32(b + 2), rev = 0;
-      for (let i = 0; i < 32; i++) { rev = (rev << 1) | (compat & 1); compat >>>= 1; } // ビットの並びを逆にする決まり
-      const cons = Array.from(u8.subarray(b + 6, b + 12));
-      while (cons.length && cons[cons.length - 1] === 0) cons.pop();
-      const codec = [e.type, ["", "A", "B", "C"][space] + prof, (rev >>> 0).toString(16), (tier ? "H" : "L") + u8[b + 12], ...cons.map((v) => v.toString(16))].join(".");
-      return { ...base, codec, description: u8.slice(b, hvcC.end) };
-    }
-    throw new Error(`映像の形式（${e.type}）に対応していません`);
-  }
-
-  // この端末で使える H.264 の設定を探す
-  async function pickEncoderConfig(W, H) {
-    for (const codec of ["avc1.640028", "avc1.640033", "avc1.4d0028", "avc1.4d0033", "avc1.42002a", "avc1.420033"]) {
-      const cfg = { codec, width: W, height: H, bitrate: 4_000_000, avc: { format: "avc" } };
-      try { if ((await VideoEncoder.isConfigSupported(cfg)).supported) return cfg; } catch (e) { /* 次の候補へ */ }
-    }
-    throw new Error("動画の形式に対応していません");
-  }
-
-  // clips の映像を順につないだ、形のそろった1本の映像（MP4）を作る
-  async function reencode(clips, onProgress, cancelled) {
-    if (!("VideoDecoder" in window) || !("VideoEncoder" in window) || !window.Mp4Muxer) {
-      throw new Error("このiPhoneでは向きのちがう動画をまとめられません（iOS 16.4以降が必要です）");
-    }
-    // 出来上がりの大きさ：1本目の見た目の向き・縦横比に合わせ、長い辺は最大1280px（PiPの小さな窓には十分。偶数にそろえる）
-    const s0 = shapeOf(clips[0].video), r0 = Math.abs(s0.b) > Math.abs(s0.a);
-    const dw0 = r0 ? s0.h : s0.w, dh0 = r0 ? s0.w : s0.h;
-    const k = Math.min(1, 1280 / Math.max(dw0, dh0));
-    const W = Math.max(2, Math.round((dw0 * k) / 2) * 2), H = Math.max(2, Math.round((dh0 * k) / 2) * 2);
-    const canvas = document.createElement("canvas");
-    canvas.width = W; canvas.height = H;
-    const ctx = canvas.getContext("2d");
-
-    const muxer = new Mp4Muxer.Muxer({
-      target: new Mp4Muxer.ArrayBufferTarget(),
-      video: { codec: "avc", width: W, height: H },
-      fastStart: "in-memory",
-    });
-    let err = null;
-    const encoder = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: (e) => { err = e; } });
-    encoder.configure(await pickEncoderConfig(W, H));
-
-    // 1コマぶん遅らせて書き出す（次のコマの時刻が分かってから、このコマの表示時間を決めるため）
-    let pending = null, pendingKey = false, count = 0;
-    const flushPending = async (untilUs) => {
-      if (!pending) return;
-      const f = new VideoFrame(pending, { timestamp: pending.timestamp, duration: Math.max(1, untilUs - pending.timestamp) });
-      pending.close(); pending = null;
-      encoder.encode(f, { keyFrame: pendingKey || count % 60 === 0 });
-      f.close(); count++;
-      while (encoder.encodeQueueSize > 4) await sleep(2); // 詰まりすぎないように少し待つ
-      if (err) throw err;
+    return {
+      rot: [0, 4, 12, 16].map((o) => dv.getInt32(m + o)).join(","), // 行列のうち回転・反転を表す部分
+      aspect: dv.getUint32(m + 36) / Math.max(1, dv.getUint32(m + 40)),
     };
-
-    const totalSamples = clips.reduce((s, c) => s + c.video.count, 0);
-    let done = 0, startSec = 0, lastTs = -1;
-    for (const c of clips) {
-      const t = c.video, sh = shapeOf(t), cfg = decoderConfig(t);
-      if (!(await VideoDecoder.isConfigSupported(cfg)).supported) throw new Error(`「${c.file.name}」の形式（${cfg.codec}）はこの端末で読めません`);
-      const frames = [];
-      const decoder = new VideoDecoder({ output: (f) => frames.push(f), error: (e) => { err = e; } });
-      decoder.configure(cfg);
-      const startUs = Math.round(startSec * 1e6), lenUs = Math.round(c.lenSec * 1e6);
-      let firstOfClip = true;
-
-      // 戻した絵を、向きを直して画用紙の真ん中に収まるように描き、書き出し待ちにする
-      const handle = async (f) => {
-        if (f.timestamp < 0 || f.timestamp >= lenUs) { f.close(); return; } // 動画の範囲外のコマ
-        const fw = f.displayWidth, fh = f.displayHeight, rot = Math.abs(sh.b) > Math.abs(sh.a);
-        const s = Math.min(W / (rot ? fh : fw), H / (rot ? fw : fh));
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
-        ctx.setTransform(sh.a * s, sh.b * s, sh.c * s, sh.d * s, W / 2, H / 2); // 動画に記録された回転をそのまま使う
-        ctx.drawImage(f, -fw / 2, -fh / 2, fw, fh);
-        f.close();
-        let ts = firstOfClip ? startUs : startUs + f.timestamp;
-        if (ts <= lastTs) ts = lastTs + 1;
-        await flushPending(ts);
-        pending = new VideoFrame(canvas, { timestamp: ts });
-        pendingKey = firstOfClip; // 動画の切れ目は必ずキーフレームにする
-        firstOfClip = false; lastTs = ts;
-      };
-      const drain = async () => { while (frames.length) await handle(frames.shift()); };
-
-      // サンプルをファイルの並び順（デコード順）に読んで、デコーダーに渡す
-      let i = 0, dts = 0;
-      for (const ch of t.chunks) {
-        let off = ch.off;
-        for (let n = 0; n < ch.n && i < t.count; n++, i++) {
-          if (cancelled()) { decoder.close(); encoder.close(); frames.forEach((f) => f.close()); pending?.close(); throw new Error("中止"); }
-          const size = t.sizes ? t.sizes[i] : t.constSize;
-          const data = new Uint8Array(await c.file.slice(off, off + size).arrayBuffer());
-          const pts = dts + (t.cto ? t.cto[i] : 0) - t.mediaTime; // 表示する時刻
-          decoder.decode(new EncodedVideoChunk({
-            type: !t.sync || t.sync[i] ? "key" : "delta",
-            timestamp: Math.round((pts / t.timescale) * 1e6),
-            data,
-          }));
-          off += size; dts += t.durs[i];
-          await drain();
-          while (decoder.decodeQueueSize > 4) { await sleep(2); await drain(); }
-          if (err) throw err;
-          onProgress(++done / totalSamples);
-        }
-      }
-      await decoder.flush();
-      await drain();
-      decoder.close();
-      startSec += c.lenSec;
-    }
-    await flushPending(Math.round(startSec * 1e6));
-    await encoder.flush();
-    encoder.close();
-    muxer.finalize();
-    return new File([muxer.target.buffer], "まとめた映像.mp4", { type: "video/mp4" });
   }
-
-  // 作り直した映像は、同じ動画の組み合わせならもう一度使う（長さや音の設定を変えるたびに作り直さない）
-  let reCache = null;
 
   // ---- 箱を作る道具 ----
   function box(type, parts) {
@@ -661,22 +535,19 @@ const LoopMp4 = (() => {
   }
 
   // 本体：files を順につないだものを、targetSec 秒ぶん途切れずにくり返す動画（Blob）にする
-  // onProgress: 映像を作り直すときの進み具合（0〜1）、cancelled: 途中でやめるときに true を返す関数
-  async function make(files, targetSec, withAudio, onProgress = () => {}, cancelled = () => false) {
+  async function make(files, targetSec, withAudio) {
     const clips = [];
     for (const f of files) clips.push(await readClip(f));
 
-    // そのままつなげられるのは、映像の形式・向き・縦横比がそろっているときだけ。ちがえば映像を作り直す
+    // 1本の線路にまとめられるのは、映像の形式・向き・縦横比がそろっているときだけ
     const s0 = shapeOf(clips[0].video);
-    const mixed = clips.some((c) => {
+    for (const c of clips) {
       const s = shapeOf(c.video);
-      return c.video.format !== clips[0].video.format || s.rot !== s0.rot || Math.abs(s.aspect / s0.aspect - 1) > 0.01;
-    });
-    let vclip = null;
-    if (mixed) {
-      const same = reCache && reCache.files.length === files.length && reCache.files.every((f, i) => f === files[i]);
-      if (!same) reCache = { files: files.slice(), file: await reencode(clips, onProgress, cancelled) };
-      vclip = await readClip(reCache.file);
+      if (c.video.format !== clips[0].video.format || s.rot !== s0.rot || Math.abs(s.aspect / s0.aspect - 1) > 0.01) {
+        const e = new Error("向き・縦横比・形式のちがう動画が混ざっているため、1本にまとめられませんでした");
+        e.mixed = true;
+        throw e;
+      }
     }
     const useAudio = withAudio && clips.every((c) => c.audio);
 
@@ -687,30 +558,26 @@ const LoopMp4 = (() => {
     const first = clips[0], mvTs = first.mvTs;
     // 何周ぶん並べるか（長さの欄は32bitなので、あふれない回数までにする）
     const fit = (ts) => Math.floor(0xFFFFFFF0 / (cycleSec * ts));
-    const tss = [mvTs, (vclip || first).video.timescale, ...(useAudio ? [first.audio.timescale] : [])];
+    const tss = [mvTs, first.video.timescale, ...(useAudio ? [first.audio.timescale] : [])];
     const reps = Math.max(1, Math.min(Math.ceil(targetSec / cycleSec), ...tss.map(fit)));
     const movieDur = Math.round(reps * cycleSec * mvTs);
 
     const ftyp = first.ftyp || box("ftyp", [ascii("qt  "), u32s([0x20050300]), ascii("qt  ")]);
 
-    // 中身を使う動画：作り直した映像があればそれと、音を使う元の動画
-    const sources = vclip ? [vclip, ...(useAudio ? clips : [])] : clips;
-
     // 新しいファイルの並び：ftyp → 新しい目次(moov) → 各動画の中身(mdat)をそのまま
     const build = (mdatStart) => {
       let p = mdatStart;
-      const offsetOf = new Map(sources.map((c) => {
+      const offsetOfs = clips.map((c) => {
         const map = c.mdats.map((m) => { const r = { from: m.start, to: m.start + m.size, shift: p - m.start }; p += m.size; return r; });
-        return [c, (off) => {
+        return (off) => {
           const m = map.find((x) => off >= x.from && off < x.to);
           if (!m) throw new Error(`「${c.file.name}」の中身の位置を読み取れませんでした`);
           return off + m.shift;
-        }];
-      }));
-      const partsOf = (kind) => clips.map((c, i) => ({ t: c[kind], clipSec: c.lenSec, startSec: starts[i], offsetOf: offsetOf.get(c) }));
+        };
+      });
+      const partsOf = (kind) => clips.map((c, i) => ({ t: c[kind], clipSec: c.lenSec, startSec: starts[i], offsetOf: offsetOfs[i] }));
       const opt = { reps, cycleSec, movieDur };
-      const videoParts = vclip ? [{ t: vclip.video, clipSec: cycleSec, startSec: 0, offsetOf: offsetOf.get(vclip) }] : partsOf("video");
-      const traks = [buildTrak(videoParts, { ...opt, isVideo: true })];
+      const traks = [buildTrak(partsOf("video"), { ...opt, isVideo: true })];
       if (useAudio) traks.push(buildTrak(partsOf("audio"), opt));
       return box("moov", [withDuration(first.u8, first.mvhd, movieDur, 16, 24), ...traks]);
     };
@@ -719,11 +586,10 @@ const LoopMp4 = (() => {
 
     const isQt = str4(ftyp, 8) === "qt  ";
     const blob = new Blob(
-      [ftyp, newMoov, ...sources.flatMap((c) => c.mdats.map((m) => c.file.slice(m.start, m.start + m.size)))],
+      [ftyp, newMoov, ...clips.flatMap((c) => c.mdats.map((m) => c.file.slice(m.start, m.start + m.size)))],
       { type: isQt ? "video/quicktime" : "video/mp4" });
     return {
       blob, reps, cycleSec, totalSec: reps * cycleSec,
-      reencoded: !!vclip,
       hasAudio: useAudio,
       noAudioAny: clips.every((c) => !c.audio),          // どの動画にも音が無い
       audioDropped: withAudio && !useAudio && clips.some((c) => c.audio), // 音のない動画が混ざっていて音を外した
@@ -876,21 +742,16 @@ const LoopMp4 = (() => {
     }
     setStatus("準備しています…");
     try {
-      const r = await LoopMp4.make(clips.map((c) => c.file), lenMin * 60, sound === "on",
-        (p) => { if (id === prepId) setStatus(`向きや形のちがう動画をそろえています… ${Math.floor(p * 100)}%`); },
-        () => id !== prepId);
+      const r = await LoopMp4.make(clips.map((c) => c.file), lenMin * 60, sound === "on");
       if (id !== prepId) return;
       const url = URL.createObjectURL(r.blob);
       setSource(url, !r.hasAudio, true); // 選んだ長さを過ぎたら、ふつうのループで最初に戻る
       longUrl = url;
       const what = clips.length > 1 ? `${clips.length}本で1周 ${formatSec(r.cycleSec)}` : `1周 ${formatSec(r.cycleSec)}`;
       meta.textContent = `${what} × ${r.reps}回 ＝ ${formatSec(r.totalSec)}つなげました`;
-      setStatus([
-        r.reencoded ? "向きや形のちがう動画があったので、映像を作り直してそろえました。" : "",
-        sound !== "on" ? ""
-          : r.audioDropped ? "音の入っていない動画が混ざっているため、音なしで再生します。"
-          : r.noAudioAny ? "この動画には音が入っていません。" : "",
-      ].join(""));
+      setStatus(sound !== "on" ? ""
+        : r.audioDropped ? "音の入っていない動画が混ざっているため、音なしで再生します。"
+        : r.noAudioAny ? "この動画には音が入っていません。" : "");
       await new Promise((res) => {
         video.addEventListener("loadedmetadata", res, { once: true });
         video.addEventListener("error", res, { once: true });
@@ -956,6 +817,15 @@ const LoopMp4 = (() => {
   video.addEventListener("pause", syncButtons);
   // プレビューをタップしたら再生・一時停止
   video.addEventListener("click", () => { if (video.src) video.paused ? video.play().catch(() => {}) : video.pause(); });
+
+  // ===== ホーム画面アプリとして起動されたとき =====
+  // iPhoneのホーム画面アプリ（Webアプリ）ではPiPが使えない不具合があるので、Safariで開き直す案内を出す。
+  // 「x-safari-https://…」は、Safariアプリでそのページを開かせるためのiPhone専用のURL
+  const standalone = navigator.standalone === true || matchMedia("(display-mode: standalone), (display-mode: fullscreen)").matches;
+  if (standalone) {
+    $("standaloneNote").hidden = false;
+    $("openSafari").href = "x-safari-" + location.href.split("#")[0];
+  }
 
   // ===== 起動 =====
   syncChips();
